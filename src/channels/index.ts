@@ -7,3 +7,5 @@
 // self-registration import below.
 
 import './cli.js';
+// Aquant fork: Slack (multi-workspace — Aquant + GlobalDots, one app, Socket Mode).
+import './slack.js';

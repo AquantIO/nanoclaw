@@ -15,6 +15,7 @@ import { migration015 } from './015-cli-scope.js';
 import { migration016 } from './016-messaging-group-instance.js';
 import { moduleApprovalsPendingApprovals } from './module-approvals-pending-approvals.js';
 import { moduleApprovalsTitleOptions } from './module-approvals-title-options.js';
+import { moduleDelegation } from './module-delegation.js';
 
 export interface Migration {
   version: number;
@@ -46,6 +47,7 @@ export const migrations: Migration[] = [
   migration014,
   migration015,
   migration016,
+  moduleDelegation,
 ];
 
 /** Row shape of PRAGMA foreign_key_check. Child rowids are stable across a

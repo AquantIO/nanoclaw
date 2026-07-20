@@ -22,3 +22,5 @@ import './scheduling/index.js';
 import './permissions/index.js';
 import './agent-to-agent/index.js';
 import './self-mod/index.js';
+// Aquant fork: Router→Apps/SRE conversation delegation.
+import './delegation/index.js';
