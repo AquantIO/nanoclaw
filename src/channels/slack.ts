@@ -88,30 +88,39 @@ registerChannelAdapter('slack', {
       mode: useSocketMode ? 'socket' : 'webhook',
     });
 
-    // Seed per-team installations (fire-and-forget; Socket Mode connect is not
-    // instantaneous, so seeding races ahead of the first event in practice).
+    // Seed per-team installations AFTER the adapter's chat.initialize() runs
+    // (setInstallation throws "Adapter not initialized" until then). Retry on
+    // that specific error; the bridge initializes on setup() shortly after the
+    // factory returns, so a short poll wins the race for every workspace.
     if (multiWorkspace) {
       void (async () => {
-        for (const [teamId, botToken] of Object.entries(byTeam)) {
-          try {
-            await slackAdapter.setInstallation(teamId, { botToken });
-            log.info('Slack installation seeded', { teamId });
-          } catch (err) {
-            log.error('Slack installation seed failed', { teamId, err });
-          }
-        }
+        const seeds: Array<{ teamId: string; botToken: string }> = Object.entries(byTeam).map(([teamId, botToken]) => ({
+          teamId,
+          botToken,
+        }));
         if (defaultToken) {
           const teamId = await resolveTeamId(defaultToken);
-          if (teamId) {
+          if (teamId) seeds.push({ teamId, botToken: defaultToken });
+          else log.error('Could not resolve team_id for default SLACK_BOT_TOKEN — that workspace will not respond');
+        }
+        for (const s of seeds) {
+          let seeded = false;
+          for (let attempt = 0; attempt < 60 && !seeded; attempt++) {
             try {
-              await slackAdapter.setInstallation(teamId, { botToken: defaultToken });
-              log.info('Slack installation seeded (default)', { teamId });
+              await slackAdapter.setInstallation(s.teamId, { botToken: s.botToken });
+              seeded = true;
+              log.info('Slack installation seeded', { teamId: s.teamId });
             } catch (err) {
-              log.error('Slack default installation seed failed', { teamId, err });
+              const msg = (err as Error)?.message ?? '';
+              if (msg.includes('not initialized')) {
+                await new Promise((r) => setTimeout(r, 500));
+              } else {
+                log.error('Slack installation seed failed', { teamId: s.teamId, err });
+                break;
+              }
             }
-          } else {
-            log.error('Could not resolve team_id for default SLACK_BOT_TOKEN — that workspace will not respond');
           }
+          if (!seeded) log.error('Slack installation seed timed out (adapter never initialized)', { teamId: s.teamId });
         }
       })();
     }

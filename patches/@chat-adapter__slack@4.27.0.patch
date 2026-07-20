@@ -1,0 +1,23 @@
+diff --git a/dist/index.js b/dist/index.js
+index e1d9675be93dfbd8a1e128edb9c2db0448b18109..c92a7cb4be98c55b333dd57cd3c6e83518299549 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1692,7 +1692,17 @@ var SlackAdapter = class _SlackAdapter {
+           event_time: body.event_time
+         };
+         try {
+-          this.processEventPayload(payload, options);
++          if (!this.defaultBotTokenProvider && payload.team_id) {
++            const __ctx = await this.resolveTokenForTeam(payload.team_id);
++            if (__ctx) {
++              await this.requestContext.run(__ctx, () => this.processEventPayload(payload, options));
++            } else {
++              this.logger.warn("Could not resolve token for socket team", { teamId: payload.team_id });
++              this.processEventPayload(payload, options);
++            }
++          } else {
++            this.processEventPayload(payload, options);
++          }
+         } catch (error) {
+           this.logger.error("Error processing socket mode events_api", {
+             error
