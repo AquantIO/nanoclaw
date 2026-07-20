@@ -103,6 +103,12 @@ registerChannelAdapter('slack', {
           if (teamId) seeds.push({ teamId, botToken: defaultToken });
           else log.error('Could not resolve team_id for default SLACK_BOT_TOKEN — that workspace will not respond');
         }
+        // Expose the seeded team ids so the adapter's channel-aware token
+        // resolution (patched withToken / parse factory) can pick the workspace
+        // token that actually owns a given channel — needed for Slack Connect
+        // (externally-shared) channels, whose events arrive tagged with the
+        // sender's team, not the channel-owning team.
+        (slackAdapter as unknown as { __seededTeams: string[] }).__seededTeams = seeds.map((s) => s.teamId);
         for (const s of seeds) {
           let seeded = false;
           for (let attempt = 0; attempt < 60 && !seeded; attempt++) {
