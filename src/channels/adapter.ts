@@ -161,6 +161,17 @@ export interface ChannelAdapter {
   subscribe?(platformId: string, threadId: string): Promise<void>;
 
   /**
+   * React to a specific message with an emoji (host-side acknowledgement).
+   * Called by the router the instant a wiring engages, so the user gets an
+   * immediate :eyes: on their triggering message — before the agent container
+   * even spawns. Runs inside the inbound event's request context, so
+   * multi-workspace adapters resolve the correct per-workspace token.
+   * `messageId` is the platform message id of the triggering message
+   * (InboundEvent.message.id). Platforms without reactions omit this.
+   */
+  react?(platformId: string, threadId: string | null, messageId: string, emoji: string): Promise<void>;
+
+  /**
    * Open (or fetch) a DM with this user, returning the platform_id of the
    * resulting DM channel. Called by the host on demand to initiate cold
    * DMs — approvals, pairing handshakes, host-initiated notifications — to
