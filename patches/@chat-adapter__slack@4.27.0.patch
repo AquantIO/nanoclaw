@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index e1d9675be93dfbd8a1e128edb9c2db0448b18109..a51fa84122f264e91e718c3985e6c0650302caa0 100644
+index e1d9675be93dfbd8a1e128edb9c2db0448b18109..688762cf55c7bd324ea67e5132120886315813a0 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -1692,7 +1692,17 @@ var SlackAdapter = class _SlackAdapter {
@@ -43,3 +43,30 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..a51fa84122f264e91e718c3985e6c065
      };
      this.chat.processMessage(this, threadId, factory, options);
    }
+@@ -2307,14 +2322,22 @@ var SlackAdapter = class _SlackAdapter {
+     const [userLookups, channelLookups] = await Promise.all([
+       Promise.all(
+         [...userIds].map(async (uid) => {
+-          const info = await this.lookupUser(uid);
+-          return [uid, info?.displayName ?? uid];
++          try {
++            const info = await this.lookupUser(uid);
++            return [uid, info?.displayName ?? uid];
++          } catch {
++            return [uid, uid];
++          }
+         })
+       ),
+       Promise.all(
+         [...channelIds].map(async (cid) => {
+-          const name = await this.lookupChannel(cid);
+-          return [cid, name];
++          try {
++            const name = await this.lookupChannel(cid);
++            return [cid, name];
++          } catch {
++            return [cid, cid];
++          }
+         })
+       )
+     ]);
