@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index e1d9675be93dfbd8a1e128edb9c2db0448b18109..c92a7cb4be98c55b333dd57cd3c6e83518299549 100644
+index e1d9675be93dfbd8a1e128edb9c2db0448b18109..a51fa84122f264e91e718c3985e6c0650302caa0 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -1692,7 +1692,17 @@ var SlackAdapter = class _SlackAdapter {
@@ -21,3 +21,25 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..c92a7cb4be98c55b333dd57cd3c6e835
          } catch (error) {
            this.logger.error("Error processing socket mode events_api", {
              error
+@@ -1959,11 +1969,16 @@ var SlackAdapter = class _SlackAdapter {
+     });
+     const isMention = event.type === "app_mention";
+     const factory = async () => {
+-      const msg = await this.parseSlackMessage(event, threadId);
+-      if (isMention) {
+-        msg.isMention = true;
+-      }
+-      return msg;
++      const __teamId = event.team_id || event.team;
++      const __ctx = (!this.defaultBotTokenProvider && __teamId) ? await this.resolveTokenForTeam(__teamId) : null;
++      const __parse = async () => {
++        const msg = await this.parseSlackMessage(event, threadId);
++        if (isMention) {
++          msg.isMention = true;
++        }
++        return msg;
++      };
++      return __ctx ? this.requestContext.run(__ctx, __parse) : __parse();
+     };
+     this.chat.processMessage(this, threadId, factory, options);
+   }
