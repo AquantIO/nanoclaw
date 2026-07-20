@@ -54,14 +54,14 @@ function collectBotTokens(): { defaultToken?: string; byTeam: Record<string, str
   return { defaultToken, byTeam };
 }
 
-async function resolveTeamId(botToken: string): Promise<string | null> {
+async function resolveIdentity(botToken: string): Promise<{ teamId: string; botUserId?: string } | null> {
   try {
     const res = await fetch('https://slack.com/api/auth.test', {
       method: 'POST',
       headers: { Authorization: `Bearer ${botToken}`, 'Content-Type': 'application/x-www-form-urlencoded' },
     });
-    const data = (await res.json()) as { ok?: boolean; team_id?: string };
-    return data.ok && data.team_id ? data.team_id : null;
+    const data = (await res.json()) as { ok?: boolean; team_id?: string; user_id?: string };
+    return data.ok && data.team_id ? { teamId: data.team_id, botUserId: data.user_id } : null;
   } catch {
     return null;
   }
@@ -94,13 +94,19 @@ registerChannelAdapter('slack', {
     // factory returns, so a short poll wins the race for every workspace.
     if (multiWorkspace) {
       void (async () => {
-        const seeds: Array<{ teamId: string; botToken: string }> = Object.entries(byTeam).map(([teamId, botToken]) => ({
-          teamId,
-          botToken,
-        }));
+        // Resolve each token's team_id AND bot user id (auth.test). The bot user
+        // id is required so the adapter can recognize a plain message.channels
+        // event whose text contains <@botUserId> as a mention (Slack sends both
+        // a message + an app_mention event; the message arrives first and would
+        // otherwise be dispatched as a non-mention).
+        const seeds: Array<{ teamId: string; botToken: string; botUserId?: string }> = [];
+        for (const [teamId, botToken] of Object.entries(byTeam)) {
+          const id = await resolveIdentity(botToken);
+          seeds.push({ teamId, botToken, botUserId: id?.botUserId });
+        }
         if (defaultToken) {
-          const teamId = await resolveTeamId(defaultToken);
-          if (teamId) seeds.push({ teamId, botToken: defaultToken });
+          const id = await resolveIdentity(defaultToken);
+          if (id) seeds.push({ teamId: id.teamId, botToken: defaultToken, botUserId: id.botUserId });
           else log.error('Could not resolve team_id for default SLACK_BOT_TOKEN — that workspace will not respond');
         }
         // Expose the seeded team ids so the adapter's channel-aware token
@@ -113,9 +119,9 @@ registerChannelAdapter('slack', {
           let seeded = false;
           for (let attempt = 0; attempt < 60 && !seeded; attempt++) {
             try {
-              await slackAdapter.setInstallation(s.teamId, { botToken: s.botToken });
+              await slackAdapter.setInstallation(s.teamId, { botToken: s.botToken, botUserId: s.botUserId });
               seeded = true;
-              log.info('Slack installation seeded', { teamId: s.teamId });
+              log.info('Slack installation seeded', { teamId: s.teamId, botUserId: s.botUserId });
             } catch (err) {
               const msg = (err as Error)?.message ?? '';
               if (msg.includes('not initialized')) {
