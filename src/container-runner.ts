@@ -574,6 +574,12 @@ async function buildContainerArgs(
     log.info('Langfuse chat-bridge env forwarded to agent container', { containerName });
   }
 
+  // --- Aquant custom: raise Claude Code's auto-compact window so agents use the
+  // model's full context. Opus 4.8 / current models are 1M-context by default
+  // (no beta needed), but Claude Code auto-compacts at 165k unless told otherwise.
+  // Default 900k (leaves headroom under 1M); override via host env.
+  args.push('-e', `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '900000'}`);
+
   // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
   args.push('--entrypoint', 'bash');
 
