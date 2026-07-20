@@ -34,6 +34,7 @@ import { getDb, hasTable } from './db/connection.js';
 import { initGroupFilesystem } from './group-init.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './modules/mount-security/index.js';
 // Provider host-side config barrel — each provider that needs host-side
 // container setup self-registers on import.
@@ -534,6 +535,44 @@ async function buildContainerArgs(
     throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
   }
   log.info('OneCLI gateway applied', { containerName });
+
+  // --- Aquant custom: Langfuse OTEL forwarding. Claude Agent SDK reads OTEL env
+  // at process start (settings.json env does NOT reach the Claude process). The
+  // collector at LANGFUSE_OTEL_ENDPOINT injects auth toward Langfuse, so headers
+  // are only a presence guard here, not forwarded. Named-key allowlist only.
+  const otelVars = readEnvFile(['LANGFUSE_OTEL_ENDPOINT', 'LANGFUSE_OTEL_HEADERS']);
+  if (otelVars.LANGFUSE_OTEL_ENDPOINT && otelVars.LANGFUSE_OTEL_HEADERS) {
+    const agentSlug = agentGroup.folder;
+    args.push('-e', 'OTEL_TRACES_EXPORTER=otlp');
+    args.push('-e', 'OTEL_METRICS_EXPORTER=otlp');
+    args.push('-e', 'OTEL_LOGS_EXPORTER=otlp');
+    args.push('-e', 'OTEL_LOG_USER_PROMPTS=1');
+    args.push('-e', 'OTEL_LOG_TOOL_DETAILS=1');
+    args.push('-e', 'OTEL_LOG_TOOL_CONTENT=1');
+    args.push('-e', 'CLAUDE_CODE_ENABLE_TELEMETRY=1');
+    args.push('-e', 'CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1');
+    args.push('-e', 'OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf');
+    args.push('-e', `OTEL_EXPORTER_OTLP_ENDPOINT=${otelVars.LANGFUSE_OTEL_ENDPOINT}`);
+    args.push('-e', `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${otelVars.LANGFUSE_OTEL_ENDPOINT}/v1/traces`);
+    args.push('-e', `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=${otelVars.LANGFUSE_OTEL_ENDPOINT}/v1/logs`);
+    args.push('-e', `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=${otelVars.LANGFUSE_OTEL_ENDPOINT}/v1/metrics`);
+    args.push('-e', 'OTEL_LOG_LEVEL=debug');
+    args.push('-e', `OTEL_SERVICE_NAME=${agentSlug}`);
+    args.push('-e', 'OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production,service.namespace=aquant-devops-agents');
+    log.info('Langfuse OTEL env forwarded to agent container', { containerName, agentSlug });
+  }
+
+  // --- Aquant custom: Langfuse chat-transcript bridge env (Stop hook POSTs
+  // transcripts to Langfuse's ingestion API). Fails silently if keys missing.
+  const lfBridge = readEnvFile(['LANGFUSE_PROJECT_PUBLIC_KEY', 'LANGFUSE_PROJECT_SECRET_KEY', 'LANGFUSE_BASE_URL']);
+  if (lfBridge.LANGFUSE_PROJECT_PUBLIC_KEY && lfBridge.LANGFUSE_PROJECT_SECRET_KEY) {
+    args.push('-e', `LANGFUSE_PROJECT_PUBLIC_KEY=${lfBridge.LANGFUSE_PROJECT_PUBLIC_KEY}`);
+    args.push('-e', `LANGFUSE_PROJECT_SECRET_KEY=${lfBridge.LANGFUSE_PROJECT_SECRET_KEY}`);
+    if (lfBridge.LANGFUSE_BASE_URL) {
+      args.push('-e', `LANGFUSE_BASE_URL=${lfBridge.LANGFUSE_BASE_URL}`);
+    }
+    log.info('Langfuse chat-bridge env forwarded to agent container', { containerName });
+  }
 
   // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
   args.push('--entrypoint', 'bash');

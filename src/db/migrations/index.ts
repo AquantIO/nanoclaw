@@ -19,6 +19,7 @@ import { moduleApprovalsTitleOptions } from './module-approvals-title-options.js
 import { migration018 } from './018-approvals-approver-user-id.js';
 import { migration019 } from './019-wiring-threads.js';
 import { migration020 } from './020-container-config-timezone.js';
+import { moduleDelegation } from './module-delegation.js';
 
 export interface Migration {
   version: number;
@@ -54,6 +55,8 @@ export const migrations: Migration[] = [
   migration016,
   migration019,
   migration020,
+  // Aquant: runs last so upstream's numbered migrations keep their order.
+  moduleDelegation,
 ];
 
 /** Row shape of PRAGMA foreign_key_check. Child rowids are stable across a
