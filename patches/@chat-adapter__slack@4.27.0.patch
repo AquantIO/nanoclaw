@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index e1d9675be93dfbd8a1e128edb9c2db0448b18109..6cd0fe2a036a08a8781cc4c84c46b18f18ee24e0 100644
+index e1d9675be93dfbd8a1e128edb9c2db0448b18109..ed05e500ff0cdcf8533fd175d79e761e15c548d6 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -865,8 +865,34 @@ var SlackAdapter = class _SlackAdapter {
@@ -56,7 +56,7 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..6cd0fe2a036a08a8781cc4c84c46b18f
          } catch (error) {
            this.logger.error("Error processing socket mode events_api", {
              error
-@@ -1959,11 +1995,31 @@ var SlackAdapter = class _SlackAdapter {
+@@ -1959,11 +1995,39 @@ var SlackAdapter = class _SlackAdapter {
      });
      const isMention = event.type === "app_mention";
      const factory = async () => {
@@ -83,7 +83,15 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..6cd0fe2a036a08a8781cc4c84c46b18f
 +      const __ctx = (!this.defaultBotTokenProvider && __teamId) ? await this.resolveTokenForTeam(__teamId) : null;
 +      const __parse = async () => {
 +        const msg = await this.parseSlackMessage(event, threadId);
-+        if (isMention) {
++        let __mention = isMention;
++        if (!__mention && event.text && __teamId) {
++          try {
++            const __inst = await this.getInstallation(__teamId);
++            const __buid = __inst && __inst.botUserId;
++            if (__buid && event.text.indexOf("<@" + __buid + ">") !== -1) __mention = true;
++          } catch { /* ignore */ }
++        }
++        if (__mention) {
 +          msg.isMention = true;
 +        }
 +        return msg;
@@ -92,7 +100,7 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..6cd0fe2a036a08a8781cc4c84c46b18f
      };
      this.chat.processMessage(this, threadId, factory, options);
    }
-@@ -2307,14 +2363,22 @@ var SlackAdapter = class _SlackAdapter {
+@@ -2307,14 +2371,22 @@ var SlackAdapter = class _SlackAdapter {
      const [userLookups, channelLookups] = await Promise.all([
        Promise.all(
          [...userIds].map(async (uid) => {
@@ -119,3 +127,34 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..6cd0fe2a036a08a8781cc4c84c46b18f
          })
        )
      ]);
+@@ -2438,7 +2510,29 @@ var SlackAdapter = class _SlackAdapter {
+   async parseSlackMessage(event, threadId, options) {
+     const isMe = this.isMessageFromSelf(event);
+     const skipSelfMention = options?.skipSelfMention ?? true;
+-    const rawText = event.text || "";
++    let rawText = event.text || "";
++    try {
++      if (event.channel && event.thread_ts && event.thread_ts !== event.ts && !options?.skipThreadRoot) {
++        const __rootRes = await this.client.conversations.history(
++          await this.withToken({ channel: event.channel, latest: event.thread_ts, oldest: event.thread_ts, inclusive: true, limit: 1 }),
++        );
++        const __root = __rootRes && __rootRes.messages && __rootRes.messages[0];
++        if (__root && __root.ts !== event.ts) {
++          const __atts = Array.isArray(__root.attachments) ? __root.attachments : [];
++          const __attText = __atts
++            .map((a) => {
++              const __fields = Array.isArray(a.fields) ? a.fields.map((fld) => [fld.title, fld.value].filter(Boolean).join(": ")).join("\n") : "";
++              return [a.pretext, a.title, a.text, __fields, a.fallback].filter(Boolean).join("\n");
++            })
++            .filter(Boolean)
++            .join("\n");
++          const __rootText = [__root.text, __attText].filter(Boolean).join("\n").trim();
++          if (__rootText) {
++            rawText = "[Alert / thread root message you were asked about]\n" + __rootText + "\n\n---\n[The reply that mentioned you]\n" + rawText;
++          }
++        }
++      }
++    } catch { /* best-effort thread-root context enrichment */ }
+     let userName = event.username || "unknown";
+     let fullName = event.username || "unknown";
+     if (event.user && !event.username) {
