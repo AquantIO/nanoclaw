@@ -555,6 +555,18 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       await adapter.startTyping(tid);
     },
 
+    async react(platformId: string, threadId: string | null, messageId: string, emoji: string) {
+      // Host-side ack. Delegates to the underlying Chat SDK adapter's
+      // addReaction (same call the reaction MCP tool uses via deliver()),
+      // but invoked in-context at engage time so the correct workspace token
+      // is resolved and the exact triggering message id is targeted.
+      if (typeof (adapter as { addReaction?: unknown }).addReaction !== 'function') return;
+      const tid = threadId ?? platformId;
+      await (adapter as unknown as {
+        addReaction(tid: string, messageId: string, emoji: string): Promise<void>;
+      }).addReaction(tid, messageId, emoji);
+    },
+
     async teardown() {
       gatewayAbort?.abort();
       await chat.shutdown();

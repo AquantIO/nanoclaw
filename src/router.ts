@@ -309,6 +309,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   let engagedCount = 0;
   let accumulatedCount = 0;
   let subscribed = false;
+  let reacted = false;
 
   for (const agent of agents) {
     const agentGroup = getAgentGroup(agent.agent_group_id);
@@ -337,6 +338,27 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     if (engages && accessOk && scopeOk) {
       await deliverToAgent(agent, agentGroup, mg, event, userId, threadsEnabled, effectiveThreadId, true);
       engagedCount++;
+
+      // Host-side acknowledgement. The moment the first wiring engages on a
+      // channel/group mention, react :eyes: to the triggering message so the
+      // user gets instant, deterministic confirmation the bot saw it — before
+      // the agent container spawns. Fire-and-forget; runs in the inbound
+      // request context so multi-workspace adapters pick the right token, and
+      // targets event.message.id (the exact triggering message). DMs are
+      // skipped (the agent replies directly there, so an ack would be noise).
+      if (!reacted && isMention && mg.is_group !== 0 && adapter?.react) {
+        reacted = true;
+        void adapter
+          .react(event.platformId, event.threadId, event.message.id, 'eyes')
+          .catch((err) =>
+            log.warn('Host-side :eyes: ack failed', {
+              channelType: event.channelType,
+              platformId: event.platformId,
+              messageId: event.message.id,
+              err,
+            }),
+          );
+      }
 
       // Mention-sticky: ask the adapter to subscribe the thread so the
       // platform's subscribed-message path carries follow-ups without
