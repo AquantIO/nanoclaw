@@ -10,6 +10,8 @@ import './scheduling.js';
 import './interactive.js';
 import './agents.js';
 import './self-mod.js';
+// Aquant fork: Router->specialist conversation delegation.
+import './delegation.js';
 import { startMcpServer } from './server.js';
 
 function log(msg: string): void {
