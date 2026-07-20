@@ -1,8 +1,43 @@
 diff --git a/dist/index.js b/dist/index.js
-index e1d9675be93dfbd8a1e128edb9c2db0448b18109..688762cf55c7bd324ea67e5132120886315813a0 100644
+index e1d9675be93dfbd8a1e128edb9c2db0448b18109..6cd0fe2a036a08a8781cc4c84c46b18f18ee24e0 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1692,7 +1692,17 @@ var SlackAdapter = class _SlackAdapter {
+@@ -865,8 +865,34 @@ var SlackAdapter = class _SlackAdapter {
+    * Workaround for Slack WebClient types not including `token` in per-method args.
+    */
+   async withToken(options) {
++    try {
++      if (!this.defaultBotTokenProvider && options && options.channel && Array.isArray(this.__seededTeams) && this.__seededTeams.length > 1) {
++        const __t = await this.__aqTokenForChannel(options.channel);
++        if (__t) return { ...options, token: __t };
++      }
++    } catch { /* fall through to default token */ }
+     return { ...options, token: await this.getToken() };
+   }
++  async __aqTokenForChannel(channelId) {
++    this.__aqChanTeam = this.__aqChanTeam || new Map();
++    let team = this.__aqChanTeam.get(channelId);
++    if (!team) {
++      const ctxTeam = this.requestContext.getStore()?.teamId;
++      const cands = [ctxTeam, ...this.__seededTeams].filter((v, i, a) => v && a.indexOf(v) === i);
++      for (const t of cands) {
++        try {
++          const c = await this.resolveTokenForTeam(t);
++          if (!c) continue;
++          const r = await this.client.conversations.info({ channel: channelId, token: c.token });
++          if (r && r.ok) { team = t; break; }
++        } catch { /* try next */ }
++      }
++      if (team) this.__aqChanTeam.set(channelId, team);
++    }
++    if (!team) return null;
++    const c = await this.resolveTokenForTeam(team);
++    return c ? c.token : null;
++  }
+   async initialize(chat) {
+     this.chat = chat;
+     if (this.defaultBotTokenProvider && !this._botUserId) {
+@@ -1692,7 +1718,17 @@ var SlackAdapter = class _SlackAdapter {
            event_time: body.event_time
          };
          try {
@@ -21,16 +56,30 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..688762cf55c7bd324ea67e5132120886
          } catch (error) {
            this.logger.error("Error processing socket mode events_api", {
              error
-@@ -1959,11 +1969,16 @@ var SlackAdapter = class _SlackAdapter {
+@@ -1959,11 +1995,31 @@ var SlackAdapter = class _SlackAdapter {
      });
      const isMention = event.type === "app_mention";
      const factory = async () => {
 -      const msg = await this.parseSlackMessage(event, threadId);
 -      if (isMention) {
 -        msg.isMention = true;
--      }
++      let __teamId = event.team_id || event.team;
++      if (!this.defaultBotTokenProvider && event.channel && Array.isArray(this.__seededTeams) && this.__seededTeams.length > 1) {
++        this.__aqChanTeam = this.__aqChanTeam || new Map();
++        if (this.__aqChanTeam.has(event.channel)) {
++          __teamId = this.__aqChanTeam.get(event.channel);
++        } else {
++          for (const __t of [__teamId, ...this.__seededTeams.filter((x) => x !== __teamId)].filter(Boolean)) {
++            try {
++              const __c = await this.resolveTokenForTeam(__t);
++              if (!__c) continue;
++              const __r = await this.client.conversations.info({ channel: event.channel, token: __c.token });
++              if (__r && __r.ok) { __teamId = __t; this.__aqChanTeam.set(event.channel, __t); break; }
++            } catch { /* try next */ }
++          }
++        }
+       }
 -      return msg;
-+      const __teamId = event.team_id || event.team;
 +      const __ctx = (!this.defaultBotTokenProvider && __teamId) ? await this.resolveTokenForTeam(__teamId) : null;
 +      const __parse = async () => {
 +        const msg = await this.parseSlackMessage(event, threadId);
@@ -43,7 +92,7 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..688762cf55c7bd324ea67e5132120886
      };
      this.chat.processMessage(this, threadId, factory, options);
    }
-@@ -2307,14 +2322,22 @@ var SlackAdapter = class _SlackAdapter {
+@@ -2307,14 +2363,22 @@ var SlackAdapter = class _SlackAdapter {
      const [userLookups, channelLookups] = await Promise.all([
        Promise.all(
          [...userIds].map(async (uid) => {
