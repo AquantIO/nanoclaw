@@ -297,6 +297,12 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   //    avoids the extra await).
   const parsed = safeParseContent(event.message.content);
   const messageText = parsed.text ?? '';
+  // Top-level = not a reply inside an existing thread. On threaded adapters
+  // the encoded threadId ends with the thread root ts; a top-level message's
+  // own id equals that root, a reply's does not. Null threadId (non-threaded
+  // / DM) counts as top-level. Consumed by the 'pattern-toplevel' engage mode.
+  const isTopLevel =
+    event.threadId === null || event.threadId.endsWith(`:${event.message.id}`);
 
   // Per-wiring thread policy inputs, resolved once per event. Each wiring's
   // threads override (NULL = inherit) resolves against the channel's declared
@@ -330,7 +336,10 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     );
     const effectiveThreadId = threadsEnabled ? event.threadId : null;
 
-    const engages = evaluateEngage(agent, messageText, isMention, mg, effectiveThreadId);
+    // Aquant: isTopLevel drives engage_mode='pattern-toplevel'. Pass the
+    // POLICY-STRIPPED thread id, not event.threadId — a wiring with threads
+    // disabled must look thread-less to engagement too, or the two disagree.
+    const engages = evaluateEngage(agent, messageText, isMention, mg, effectiveThreadId, isTopLevel);
 
     const accessOk = engages && (!accessGate || accessGate(event, userId, mg, agent.agent_group_id).allowed);
     const scopeOk = engages && (!senderScopeGate || senderScopeGate(event, userId, mg, agent).allowed);
@@ -441,6 +450,7 @@ function evaluateEngage(
   isMention: boolean,
   mg: MessagingGroup,
   threadId: string | null,
+  isTopLevel: boolean,
 ): boolean {
   switch (agent.engage_mode) {
     case 'pattern': {
@@ -450,6 +460,19 @@ function evaluateEngage(
         return new RegExp(pat).test(text);
       } catch {
         // Bad regex: fail open so admin sees the agent responding + can fix.
+        return true;
+      }
+    }
+    case 'pattern-toplevel': {
+      // Like 'pattern' but engages ONLY on a top-level channel message,
+      // never on thread replies — the support agent drafts a first-response
+      // to top-level @mentions and must not butt into ongoing thread chatter.
+      if (!isTopLevel) return false;
+      const pat = agent.engage_pattern ?? '.';
+      if (pat === '.') return true;
+      try {
+        return new RegExp(pat).test(text);
+      } catch {
         return true;
       }
     }
