@@ -280,6 +280,12 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   //    avoids the extra await).
   const parsed = safeParseContent(event.message.content);
   const messageText = parsed.text ?? '';
+  // Top-level = not a reply inside an existing thread. On threaded adapters
+  // the encoded threadId ends with the thread root ts; a top-level message's
+  // own id equals that root, a reply's does not. Null threadId (non-threaded
+  // / DM) counts as top-level. Consumed by the 'pattern-toplevel' engage mode.
+  const isTopLevel =
+    event.threadId === null || event.threadId.endsWith(`:${event.message.id}`);
 
   let engagedCount = 0;
   let accumulatedCount = 0;
@@ -290,7 +296,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     const agentGroup = getAgentGroup(agent.agent_group_id);
     if (!agentGroup) continue;
 
-    const engages = evaluateEngage(agent, messageText, isMention, mg, event.threadId);
+    const engages = evaluateEngage(agent, messageText, isMention, mg, event.threadId, isTopLevel);
 
     const accessOk = engages && (!accessGate || accessGate(event, userId, mg, agent.agent_group_id).allowed);
     const scopeOk = engages && (!senderScopeGate || senderScopeGate(event, userId, mg, agent).allowed);
@@ -400,6 +406,7 @@ function evaluateEngage(
   isMention: boolean,
   mg: MessagingGroup,
   threadId: string | null,
+  isTopLevel: boolean,
 ): boolean {
   switch (agent.engage_mode) {
     case 'pattern': {
@@ -409,6 +416,19 @@ function evaluateEngage(
         return new RegExp(pat).test(text);
       } catch {
         // Bad regex: fail open so admin sees the agent responding + can fix.
+        return true;
+      }
+    }
+    case 'pattern-toplevel': {
+      // Like 'pattern' but engages ONLY on a top-level channel message,
+      // never on thread replies — the support agent drafts a first-response
+      // to top-level @mentions and must not butt into ongoing thread chatter.
+      if (!isTopLevel) return false;
+      const pat = agent.engage_pattern ?? '.';
+      if (pat === '.') return true;
+      try {
+        return new RegExp(pat).test(text);
+      } catch {
         return true;
       }
     }

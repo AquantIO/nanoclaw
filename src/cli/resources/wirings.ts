@@ -25,8 +25,8 @@ registerResource({
       name: 'engage_mode',
       type: 'string',
       description:
-        'When the agent engages. "mention" — only when @mentioned or in DMs. "mention-sticky" — once mentioned in a thread, the agent subscribes and responds to all subsequent messages in that thread without needing further mentions. "pattern" — matches every message against engage_pattern regex.',
-      enum: ['pattern', 'mention', 'mention-sticky'],
+        'When the agent engages. "mention" — only when @mentioned or in DMs. "mention-sticky" — once mentioned in a thread, the agent subscribes and responds to all subsequent messages in that thread without needing further mentions. "pattern" — matches every message against engage_pattern regex. "pattern-toplevel" — like pattern but only on top-level messages, never thread replies.',
+      enum: ['pattern', 'pattern-toplevel', 'mention', 'mention-sticky'],
       default: 'mention',
       updatable: true,
     },
