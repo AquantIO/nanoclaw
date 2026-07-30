@@ -528,6 +528,23 @@ async function deliverToAgent(
     }
   }
 
+  // Mark the session-creating message so the agent can distinguish the
+  // first turn of a thread from follow-ups (prompts key their opener /
+  // follow-up protocols on this). Content is normally a JSON blob; plain
+  // non-JSON content skips the marker rather than corrupting it.
+  let contentForWrite = event.message.content;
+  if (created) {
+    try {
+      const obj = JSON.parse(contentForWrite) as Record<string, unknown>;
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        obj.first_turn = true;
+        contentForWrite = JSON.stringify(obj);
+      }
+    } catch {
+      /* non-JSON content — no marker */
+    }
+  }
+
   writeSessionMessage(session.agent_group_id, session.id, {
     id: messageIdForAgent(event.message.id, agent.agent_group_id),
     kind: event.message.kind,
@@ -535,7 +552,7 @@ async function deliverToAgent(
     platformId: deliveryAddr.platformId,
     channelType: deliveryAddr.channelType,
     threadId: deliveryAddr.threadId,
-    content: event.message.content,
+    content: contentForWrite,
     trigger: wake ? 1 : 0,
   });
 
