@@ -812,11 +812,43 @@ describe('conversational engage mode', () => {
     const { registerChannelAdapter, initChannelAdapters, teardownChannelAdapters } =
       await import('./channels/channel-registry.js');
 
+    // Registered under a distinct instance key ('discord-conv') that no
+    // other test resolves — registerChannelAdapter writes into the
+    // module-level registry Map, which teardownChannelAdapters() never
+    // clears (there is no unregister API), so a key shared with another
+    // suite (e.g. plain 'discord') would leave this mock's stale factory
+    // reachable by later initChannelAdapters() calls. A dedicated
+    // messaging group/wiring on the matching instance keeps this test
+    // fully self-contained, mirroring the isolation pattern in the
+    // 'router — channel instances' describe block below.
+    createMessagingGroup({
+      id: 'mg-conv-sub',
+      channel_type: 'discord',
+      instance: 'discord-conv',
+      platform_id: 'chan-456',
+      name: 'Conversational subscribe test',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    createMessagingGroupAgent({
+      id: 'mga-conv-sub',
+      messaging_group_id: 'mg-conv-sub',
+      agent_group_id: 'ag-1',
+      engage_mode: 'conversational',
+      engage_pattern: null,
+      sender_scope: 'all',
+      ignored_message_policy: 'accumulate',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+
     const subscribeSpy = vi.fn().mockResolvedValue(undefined);
     const adapter = {
-      name: 'discord',
+      name: 'discord-conv',
       channelType: 'discord',
-      instance: undefined,
+      instance: 'discord-conv',
       supportsThreads: true,
       async setup() {},
       async teardown() {},
@@ -826,7 +858,7 @@ describe('conversational engage mode', () => {
       },
       subscribe: subscribeSpy,
     };
-    registerChannelAdapter('discord', { factory: () => adapter });
+    registerChannelAdapter('discord-conv', { factory: () => adapter });
     await initChannelAdapters(() => ({
       onInbound: () => {},
       onInboundEvent: () => {},
@@ -837,8 +869,9 @@ describe('conversational engage mode', () => {
     try {
       await routeInbound({
         channelType: 'discord',
-        platformId: 'chan-123',
-        threadId: 'chan-123:1000',
+        instance: 'discord-conv',
+        platformId: 'chan-456',
+        threadId: 'chan-456:1000',
         message: {
           id: '2005',
           kind: 'chat',
@@ -848,7 +881,7 @@ describe('conversational engage mode', () => {
         },
       });
 
-      expect(subscribeSpy).toHaveBeenCalledWith('chan-123', 'chan-123:1000');
+      expect(subscribeSpy).toHaveBeenCalledWith('chan-456', 'chan-456:1000');
     } finally {
       await teardownChannelAdapters();
     }
