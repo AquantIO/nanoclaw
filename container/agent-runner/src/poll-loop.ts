@@ -340,6 +340,13 @@ export async function processQuery(
   // the same prompt again. Unused (and unmaintained) when the provider
   // doesn't implement `onExchangeComplete`.
   const archivePrompts: string[] = [initialPrompt];
+  // Per-prompt reply routing, kept in lockstep with archivePrompts (same
+  // push/shift discipline): each result event answers the oldest unanswered
+  // prompt, so its reply must be addressed to THAT batch's thread. Without
+  // this, replies were addressed from the most recent inbound row, so a
+  // message landing on thread B while the agent was still answering thread A
+  // hijacked A's reply into B.
+  const promptRoutings: RoutingContext[] = [routing];
 
   // Concurrent polling: push follow-ups into the active query as they arrive.
   // We do NOT force-end the stream on silence — keeping the query open avoids
@@ -420,6 +427,7 @@ export async function processQuery(
         unwrappedNudged = false;
         query.push(prompt);
         archivePrompts.push(prompt);
+        promptRoutings.push(extractRouting(keep));
         markCompleted(keptIds);
       } catch (err) {
         // Without this catch the rejection escapes the void IIFE and Node
@@ -481,14 +489,17 @@ export async function processQuery(
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
+        // Address the reply to the batch this result answers (oldest
+        // unanswered prompt), not the initial batch or the latest arrival.
+        const batchRouting = promptRoutings[0] ?? routing;
         if (event.text) {
-          const { sent, hasUnwrapped } = dispatchResultText(event.text, routing);
+          const { sent, hasUnwrapped } = dispatchResultText(event.text, batchRouting);
           if (sent === 0 && event.isError === true) {
             // Non-retryable error turn (e.g. a 403 billing_error) with no
             // <message> envelope: deliver the notice instead of dropping it as
             // scratchpad, and skip the re-wrap nudge — it would just re-hammer
             // the failing gateway turn after turn.
-            deliverErrorResult(event.text, routing);
+            deliverErrorResult(event.text, batchRouting);
             notifyExchangeComplete(onExchangeComplete, {
               prompt: archivePrompts[0] ?? initialPrompt,
               result: event.text,
@@ -496,6 +507,7 @@ export async function processQuery(
               status: 'error',
             });
             archivePrompts.shift();
+            promptRoutings.shift();
           } else {
             const willRetryWrapping = hasUnwrapped && !unwrappedNudged;
             notifyExchangeComplete(onExchangeComplete, {
@@ -517,10 +529,14 @@ export async function processQuery(
             }
             // The wrapping-retry result answers the SAME user prompt — keep it
             // queued so the retry archives against it, not the nudge text.
-            if (!willRetryWrapping) archivePrompts.shift();
+            if (!willRetryWrapping) {
+              archivePrompts.shift();
+              promptRoutings.shift();
+            }
           }
         } else {
           archivePrompts.shift();
+          promptRoutings.shift();
         }
       }
     }
@@ -645,11 +661,18 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
 function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext): void {
   const platformId = dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
   const channelType = dest.type === 'channel' ? dest.channelType! : 'agent';
-  // Resolve thread_id per-destination from the most recent inbound message
-  // that came from this same channel+platform. In agent-shared sessions,
-  // different destinations have different thread contexts — using a single
-  // routing.threadId would stamp one channel's thread onto another.
-  const destRouting = resolveDestinationThread(channelType, platformId);
+  // Reply addressing, in priority order:
+  //  1. Destination == the channel the answered batch came from → reply in
+  //     that batch's own thread. Resolving from "most recent inbound row"
+  //     here misdelivers: a message arriving on thread B while the agent is
+  //     still answering thread A hijacks A's reply into B.
+  //  2. Different destination (agent-shared sessions, cross-channel sends) →
+  //     the batch carries no thread context for it, so fall back to the most
+  //     recent inbound message from that channel+platform.
+  const sameOrigin = routing.channelType === channelType && routing.platformId === platformId;
+  const destRouting = sameOrigin
+    ? { threadId: routing.threadId, inReplyTo: routing.inReplyTo }
+    : resolveDestinationThread(channelType, platformId);
   writeMessageOut({
     id: generateId(),
     in_reply_to: destRouting?.inReplyTo ?? routing.inReplyTo,
