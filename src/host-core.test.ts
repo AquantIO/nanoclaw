@@ -807,6 +807,50 @@ describe('conversational engage mode', () => {
     expect(wakeContainer).not.toHaveBeenCalled();
   });
 
+  it('stamps first_turn=true only on the session-creating message', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    // First plain reply — accumulates and creates the session.
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:1000',
+      message: {
+        id: '2005',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'first plain reply' }),
+        timestamp: now(),
+      },
+    });
+
+    // Second plain reply — session already exists.
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:1000',
+      message: {
+        id: '2006',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'second plain reply' }),
+        timestamp: now(),
+      },
+    });
+
+    const session = findSession('mg-1', null);
+    expect(session).toBeDefined();
+    const db = new Database(inboundDbPath('ag-1', session!.id));
+    const rows = db.prepare('SELECT id, content FROM messages_in ORDER BY rowid').all() as Array<{
+      id: string;
+      content: string;
+    }>;
+    db.close();
+    expect(rows).toHaveLength(2);
+    expect(JSON.parse(rows[0].content).first_turn).toBe(true);
+    expect(JSON.parse(rows[1].content).first_turn).toBeUndefined();
+  });
+
   it('subscribes the thread on first engage', async () => {
     const { routeInbound } = await import('./router.js');
     const { registerChannelAdapter, initChannelAdapters, teardownChannelAdapters } =

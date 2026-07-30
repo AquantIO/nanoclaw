@@ -193,6 +193,20 @@ describe('reply_to + quoted_message rendering', () => {
   });
 });
 
+describe('first_turn attribute', () => {
+  it('renders first_turn="true" when content carries the flag', () => {
+    insertMessage('m1', 'chat', { sender: 'Alice', text: 'hi', first_turn: true });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toMatch(/<message[^>]* first_turn="true"/);
+  });
+
+  it('omits first_turn when the flag is absent', () => {
+    insertMessage('m1', 'chat', { sender: 'Alice', text: 'hi' });
+    const result = formatMessages(getPendingMessages());
+    expect(result).not.toContain('first_turn');
+  });
+});
+
 describe('XML escaping', () => {
   it('escapes <, >, &, " in sender and body', () => {
     insertMessage('m1', 'chat', {
