@@ -326,13 +326,13 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
           );
       }
 
-      // Mention-sticky: ask the adapter to subscribe the thread so the
-      // platform's subscribed-message path carries follow-ups without
-      // requiring another @mention. Threaded-adapter only; DMs and
+      // Mention-sticky / conversational: ask the adapter to subscribe the
+      // thread so the platform's subscribed-message path carries follow-ups
+      // without requiring another @mention. Threaded-adapter only; DMs and
       // non-threaded platforms skip.
       if (
         !subscribed &&
-        agent.engage_mode === 'mention-sticky' &&
+        (agent.engage_mode === 'mention-sticky' || agent.engage_mode === 'conversational') &&
         adapter?.supportsThreads &&
         adapter.subscribe &&
         event.threadId !== null &&
