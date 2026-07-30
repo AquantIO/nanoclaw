@@ -110,6 +110,7 @@ python3 -m json.tool logs/setup-migration/handoff.json
 2. Check error log: `tail logs/nanoclaw.error.log`
 3. Check sender policy: `sqlite3 data/v2.db "SELECT unknown_sender_policy FROM messaging_groups"` — must be `public` before owner is seeded
 4. Check engage pattern: `sqlite3 data/v2.db "SELECT engage_mode, engage_pattern FROM messaging_group_agents"` — should be `pattern` / `.` for respond-to-everything
+5. For a conversational wiring, `engage_mode` should be `conversational` — it engages on @mention at any thread level; a non-NULL `engage_pattern` additionally matches top-level messages; pair with `ignored_message_policy='accumulate'` for silent thread context
 
 **Session not continuing from v1:**
 1. Check continuation is set: see "Session continuation" query above

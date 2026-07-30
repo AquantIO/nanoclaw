@@ -36,6 +36,7 @@ Consequences:
   - v1 `trigger_pattern` non-empty → v2 `engage_mode='pattern'`, `engage_pattern = <the regex>`
   - v1 `requires_trigger=0` or pattern was `.`/`.*` → v2 `engage_mode='pattern'`, `engage_pattern='.'` (the "always" flavor)
   - no pattern and requires a trigger → v2 `engage_mode='mention'`
+  - v2 also has `engage_mode='conversational'`, with no v1 equivalent — it engages on @mention at any thread level; a non-NULL `engage_pattern` additionally matches top-level messages; pair with `ignored_message_policy='accumulate'` for silent thread context
   - `sender_scope` and `ignored_message_policy` are new; defaults `all` / `drop`
 - **JID decomposition.** v1's `jid` column stored `dc:12345` / `tg:67890`. v2 splits this into `channel_type` + `platform_id`. Concretely: `dc:12345` becomes `channel_type='discord'`, `platform_id='discord:12345'`. Prefix aliases (`dc` → `discord`, `tg` → `telegram`, `wa` → `whatsapp`) are in `setup/migrate-v2/shared.ts`.
 - **`channel_name` was unreliable in v1.** Many rows had it empty; the actual channel had to be guessed from the JID prefix. v2's `channel_type` is always explicit.
