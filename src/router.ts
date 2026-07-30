@@ -443,6 +443,9 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
  *                      session existence IS our subscription state; once
  *                      a thread has engaged us once, follow-ups arrive
  *                      with no mention and should still fire.
+ *   'conversational' — platform mention at ANY thread level, OR a
+ *                      non-NULL engage_pattern matching a TOP-LEVEL
+ *                      message. Never consults session existence.
  */
 function evaluateEngage(
   agent: MessagingGroupAgent,
@@ -485,6 +488,31 @@ function evaluateEngage(
       if (mg.is_group === 0) return false; // DMs never use mention-sticky sensibly
       const existing = findSessionForAgent(agent.agent_group_id, mg.id, threadId);
       return existing !== undefined;
+    }
+    case 'conversational': {
+      // Conversational threads: platform mention at ANY level wakes the
+      // agent; a non-NULL engage_pattern additionally triggers on TOP-LEVEL
+      // messages (e.g. '@Valerii\b' opens a support thread). Unlike
+      // 'mention-sticky' this mode deliberately does NOT consult session
+      // existence: with ignored_message_policy='accumulate' the session is
+      // created by the first plain message (deliverToAgent resolves the
+      // session unconditionally), so a session-existence check would make
+      // the agent engage on every message in the channel. Un-mentioned
+      // replies accumulate as trigger=0 context instead.
+      if (isMention) return true;
+      if (!isTopLevel) return false;
+      // NULL pattern = no top-level arm at all (pure mention-to-wake).
+      // Deliberately different from 'pattern'/'pattern-toplevel', where a
+      // NULL pattern defaults to '.' — an always-true top-level arm would
+      // engage on every Alertmanager post in the SRE channels.
+      if (agent.engage_pattern === null) return false;
+      if (agent.engage_pattern === '.') return true;
+      try {
+        return new RegExp(agent.engage_pattern).test(text);
+      } catch {
+        // Bad regex: fail open, consistent with 'pattern'.
+        return true;
+      }
     }
     default:
       return false;

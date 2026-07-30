@@ -597,6 +597,323 @@ describe('router', () => {
   });
 });
 
+describe('conversational engage mode', () => {
+  beforeEach(() => {
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Test Agent',
+      folder: 'test-agent',
+      agent_provider: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-1',
+      channel_type: 'discord',
+      platform_id: 'chan-123',
+      name: 'General',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    createMessagingGroupAgent({
+      id: 'mga-1',
+      messaging_group_id: 'mg-1',
+      agent_group_id: 'ag-1',
+      engage_mode: 'conversational',
+      engage_pattern: null,
+      sender_scope: 'all',
+      ignored_message_policy: 'accumulate',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+  });
+
+  it('engages on a mention in a thread reply', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:1000',
+      message: {
+        id: '2000',
+        kind: 'chat',
+        content: JSON.stringify({ text: '@bot can you help' }),
+        timestamp: now(),
+        isMention: true,
+      },
+    });
+
+    expect(wakeContainer).toHaveBeenCalled();
+  });
+
+  it('does not engage on a plain thread reply — accumulates trigger=0 without waking', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:1000',
+      message: {
+        id: '2001',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'just chatting along' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).not.toHaveBeenCalled();
+
+    // session_mode='shared' collapses threadId to null in the session key.
+    const session = findSession('mg-1', null);
+    expect(session).toBeDefined();
+    const db = new Database(inboundDbPath('ag-1', session!.id));
+    const rows = db.prepare('SELECT id, trigger FROM messages_in').all() as Array<{
+      id: string;
+      trigger: number;
+    }>;
+    db.close();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].trigger).toBe(0);
+  });
+
+  it('does not engage on a plain top-level message when engage_pattern is NULL', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:msg-top1',
+      message: {
+        id: 'msg-top1',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'hello channel' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).not.toHaveBeenCalled();
+    const session = findSession('mg-1', null);
+    expect(session).toBeDefined();
+    const db = new Database(inboundDbPath('ag-1', session!.id));
+    const rows = db.prepare('SELECT id, trigger FROM messages_in').all() as Array<{
+      id: string;
+      trigger: number;
+    }>;
+    db.close();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].trigger).toBe(0);
+  });
+
+  it('engages on a top-level message matching engage_pattern', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    const { updateMessagingGroupAgent } = await import('./db/messaging-groups.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    updateMessagingGroupAgent('mga-1', { engage_pattern: '@Valerii\\b' });
+
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:msg-top2',
+      message: {
+        id: 'msg-top2',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'hey @Valerii can you look' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).toHaveBeenCalled();
+  });
+
+  it('does not engage on a thread reply matching engage_pattern (pattern arm is top-level only)', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    const { updateMessagingGroupAgent } = await import('./db/messaging-groups.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    updateMessagingGroupAgent('mga-1', { engage_pattern: '@Valerii\\b' });
+
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:1000',
+      message: {
+        id: '2002',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'hey @Valerii can you look' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).not.toHaveBeenCalled();
+    const session = findSession('mg-1', null);
+    expect(session).toBeDefined();
+    const db = new Database(inboundDbPath('ag-1', session!.id));
+    const rows = db.prepare('SELECT id, trigger FROM messages_in').all() as Array<{
+      id: string;
+      trigger: number;
+    }>;
+    db.close();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].trigger).toBe(0);
+  });
+
+  it('session existence does not create engagement (no mention-sticky behavior)', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    // First plain reply — accumulates and creates the session.
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:1000',
+      message: {
+        id: '2003',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'first plain reply' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).not.toHaveBeenCalled();
+    const session = findSession('mg-1', null);
+    expect(session).toBeDefined();
+
+    // Second plain reply — session now exists, but conversational mode
+    // doesn't consult session existence, so it still must not wake.
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:1000',
+      message: {
+        id: '2004',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'second plain reply' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).not.toHaveBeenCalled();
+  });
+});
+
+describe('pattern-toplevel engage mode (coverage backfill)', () => {
+  beforeEach(() => {
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Test Agent',
+      folder: 'test-agent',
+      agent_provider: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-1',
+      channel_type: 'discord',
+      platform_id: 'chan-123',
+      name: 'General',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    createMessagingGroupAgent({
+      id: 'mga-1',
+      messaging_group_id: 'mg-1',
+      agent_group_id: 'ag-1',
+      engage_mode: 'pattern-toplevel',
+      engage_pattern: '@Valerii\\b',
+      sender_scope: 'all',
+      ignored_message_policy: 'accumulate',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+  });
+
+  it('engages on a top-level message matching the pattern', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:msg-top3',
+      message: {
+        id: 'msg-top3',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'hey @Valerii please check this' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).toHaveBeenCalled();
+  });
+
+  it('never engages on a thread reply, even one matching the pattern', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:1000',
+      message: {
+        id: '3001',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'hey @Valerii please check this' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).not.toHaveBeenCalled();
+    const session = findSession('mg-1', null);
+    expect(session).toBeDefined();
+    const db = new Database(inboundDbPath('ag-1', session!.id));
+    const rows = db.prepare('SELECT id, trigger FROM messages_in').all() as Array<{
+      id: string;
+      trigger: number;
+    }>;
+    db.close();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].trigger).toBe(0);
+  });
+
+  it('treats a NULL pattern as always-match on top-level messages', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { wakeContainer } = await import('./container-runner.js');
+    const { updateMessagingGroupAgent } = await import('./db/messaging-groups.js');
+    (wakeContainer as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    updateMessagingGroupAgent('mga-1', { engage_pattern: null });
+
+    await routeInbound({
+      channelType: 'discord',
+      platformId: 'chan-123',
+      threadId: 'chan-123:msg-top4',
+      message: {
+        id: 'msg-top4',
+        kind: 'chat',
+        content: JSON.stringify({ text: 'anything at all' }),
+        timestamp: now(),
+      },
+    });
+
+    expect(wakeContainer).toHaveBeenCalled();
+  });
+});
+
 describe('router — channel instances', () => {
   beforeEach(() => {
     createAgentGroup({

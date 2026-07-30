@@ -70,8 +70,8 @@ registerResource({
       name: 'engage_mode',
       type: 'string',
       description:
-        'When the agent engages. "mention" — only when @mentioned or in DMs. "mention-sticky" — once mentioned in a thread, the agent subscribes and responds to all subsequent messages in that thread without needing further mentions. "pattern" — matches every message against engage_pattern regex. "pattern-toplevel" — like pattern but only on top-level messages, never thread replies. Default: declared by the channel adapter for the target chat (DM vs group); "mention" when the channel has no declaration.',
-      enum: ['pattern', 'pattern-toplevel', 'mention', 'mention-sticky'],
+        'When the agent engages. "mention" — only when @mentioned or in DMs. "mention-sticky" — once mentioned in a thread, the agent subscribes and responds to all subsequent messages in that thread without needing further mentions. "pattern" — matches every message against engage_pattern regex. "pattern-toplevel" — like pattern but only on top-level messages, never thread replies. "conversational" — engages on @mention at any thread level, plus (when engage_pattern is set) on top-level messages matching it; un-mentioned replies rely on ignored_message_policy=accumulate for context. NULL pattern = mention-only. Default: declared by the channel adapter for the target chat (DM vs group); "mention" when the channel has no declaration.',
+      enum: ['pattern', 'pattern-toplevel', 'mention', 'mention-sticky', 'conversational'],
       default: 'mention',
       updatable: true,
     },
