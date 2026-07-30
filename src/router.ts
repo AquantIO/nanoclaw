@@ -475,6 +475,20 @@ function evaluateEngage(
   }
 }
 
+/**
+ * Bound `promise` to `ms` milliseconds. Rejects with an Error if it hasn't
+ * settled in time. Clears the timer in `finally` regardless of which side of
+ * the race wins, so a fast-resolving promise never leaves a dangling timer
+ * handle behind (which would otherwise keep a test runner process alive).
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function deliverToAgent(
   agent: MessagingGroupAgent,
   agentGroup: AgentGroup,
@@ -515,7 +529,13 @@ async function deliverToAgent(
   // is true exactly once), for both engaged and accumulated deliveries.
   if (created && event.threadId !== null && !isTopLevel && mg.is_group !== 0 && adapter?.fetchThreadHistory) {
     try {
-      const history = await adapter.fetchThreadHistory(event.platformId, event.threadId, 50, event.message.id);
+      // Bounded so a slow/hung platform call can't stall the wake behind it
+      // — a timeout falls into the same catch as any other fetch failure.
+      const history = await withTimeout(
+        adapter.fetchThreadHistory(event.platformId, event.threadId, 50, event.message.id),
+        5000,
+        'Thread-history backfill fetch',
+      );
       if (history.length > 0) {
         const transcript = history
           .map((m) => `${m.timestamp ? `[${m.timestamp}] ` : ''}${m.sender}: ${m.text}`)

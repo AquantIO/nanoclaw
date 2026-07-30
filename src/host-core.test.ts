@@ -1052,8 +1052,42 @@ describe('thread-history backfill', () => {
       db.close();
       expect(rows).toHaveLength(2);
       expect(rows[0].trigger).toBe(0);
-      expect(JSON.parse(rows[0].content).text).toContain('Filip: earlier message');
+      expect(JSON.parse(rows[0].content).text).toContain('[999.1] Filip: earlier message');
       expect(rows[1].id).toContain('2000');
+      // Lock the first_turn stamp's placement: only the session-creating
+      // EVENT row gets it, never the backfill row that precedes it.
+      expect(JSON.parse(rows[0].content).first_turn).toBeUndefined();
+      expect(JSON.parse(rows[1].content).first_turn).toBe(true);
+    });
+  });
+
+  it('writes no backfill row when fetchThreadHistory resolves empty', async () => {
+    const { routeInbound } = await import('./router.js');
+    const fetchThreadHistory = mockFetchThreadHistory(async () => []);
+
+    await withMockAdapter(fetchThreadHistory, async () => {
+      await routeInbound({
+        channelType: 'discord',
+        instance: 'discord-backfill',
+        platformId: 'chan-123',
+        threadId: 'chan-123:1000',
+        message: {
+          id: '2000',
+          kind: 'chat',
+          content: JSON.stringify({ text: 'a plain reply' }),
+          timestamp: now(),
+        },
+      });
+
+      expect(fetchThreadHistory).toHaveBeenCalledTimes(1);
+
+      const session = findSession('mg-backfill', 'chan-123:1000');
+      expect(session).toBeDefined();
+      const db = new Database(inboundDbPath('ag-backfill', session!.id));
+      const rows = db.prepare('SELECT id FROM messages_in ORDER BY rowid').all() as Array<{ id: string }>;
+      db.close();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toContain('2000');
     });
   });
 
