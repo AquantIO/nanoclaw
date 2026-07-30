@@ -932,6 +932,226 @@ describe('conversational engage mode', () => {
   });
 });
 
+type FetchThreadHistoryMock = ReturnType<
+  typeof vi.fn<
+    (
+      platformId: string,
+      threadId: string,
+      limit: number,
+      excludeMessageId?: string,
+    ) => Promise<Array<{ sender: string; text: string; timestamp?: string }>>
+  >
+>;
+
+function mockFetchThreadHistory(
+  impl: () => Promise<Array<{ sender: string; text: string; timestamp?: string }>>,
+): FetchThreadHistoryMock {
+  return vi.fn(impl) as FetchThreadHistoryMock;
+}
+
+describe('thread-history backfill', () => {
+  beforeEach(() => {
+    createAgentGroup({
+      id: 'ag-backfill',
+      name: 'Backfill Agent',
+      folder: 'backfill-agent',
+      agent_provider: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-backfill',
+      channel_type: 'discord',
+      instance: 'discord-backfill',
+      platform_id: 'chan-123',
+      name: 'Backfill channel',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    createMessagingGroupAgent({
+      id: 'mga-backfill',
+      messaging_group_id: 'mg-backfill',
+      agent_group_id: 'ag-backfill',
+      engage_mode: 'conversational',
+      engage_pattern: null,
+      sender_scope: 'all',
+      ignored_message_policy: 'accumulate',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+  });
+
+  // Registered under a distinct instance key ('discord-backfill') for the same
+  // reason as the conversational-mode subscribe test above: the registry Map
+  // is never cleared, so a shared key would leak a stale mock factory into
+  // later suites. Each test registers its own adapter (fresh spy) and tears
+  // down via try/finally so activeAdapters (which IS cleared on teardown)
+  // never carries a reference into the next test.
+  async function withMockAdapter<T>(fetchThreadHistory: FetchThreadHistoryMock, fn: () => Promise<T>): Promise<T> {
+    const { registerChannelAdapter, initChannelAdapters, teardownChannelAdapters } =
+      await import('./channels/channel-registry.js');
+    const adapter = {
+      name: 'discord-backfill',
+      channelType: 'discord',
+      instance: 'discord-backfill',
+      supportsThreads: true,
+      async setup() {},
+      async teardown() {},
+      isConnected: () => true,
+      async deliver() {
+        return undefined;
+      },
+      fetchThreadHistory,
+    };
+    registerChannelAdapter('discord-backfill', { factory: () => adapter });
+    await initChannelAdapters(() => ({
+      onInbound: () => {},
+      onInboundEvent: () => {},
+      onMetadata: () => {},
+      onAction: () => {},
+    }));
+    try {
+      return await fn();
+    } finally {
+      await teardownChannelAdapters();
+    }
+  }
+
+  it('backfills thread history once when a mid-thread message creates the session', async () => {
+    const { routeInbound } = await import('./router.js');
+    const fetchThreadHistory = mockFetchThreadHistory(async () => [
+      { sender: 'Filip', text: 'earlier message', timestamp: '999.1' },
+    ]);
+
+    await withMockAdapter(fetchThreadHistory, async () => {
+      await routeInbound({
+        channelType: 'discord',
+        instance: 'discord-backfill',
+        platformId: 'chan-123',
+        threadId: 'chan-123:1000',
+        message: {
+          id: '2000',
+          kind: 'chat',
+          content: JSON.stringify({ text: 'a plain reply' }),
+          timestamp: now(),
+        },
+      });
+
+      expect(fetchThreadHistory).toHaveBeenCalledTimes(1);
+      expect(fetchThreadHistory).toHaveBeenCalledWith('chan-123', 'chan-123:1000', 50, '2000');
+
+      const session = findSession('mg-backfill', 'chan-123:1000');
+      expect(session).toBeDefined();
+      const db = new Database(inboundDbPath('ag-backfill', session!.id));
+      const rows = db.prepare('SELECT id, trigger, content FROM messages_in ORDER BY rowid').all() as Array<{
+        id: string;
+        trigger: number;
+        content: string;
+      }>;
+      db.close();
+      expect(rows).toHaveLength(2);
+      expect(rows[0].trigger).toBe(0);
+      expect(JSON.parse(rows[0].content).text).toContain('Filip: earlier message');
+      expect(rows[1].id).toContain('2000');
+    });
+  });
+
+  it('does not backfill when the session is created by a top-level message', async () => {
+    const { routeInbound } = await import('./router.js');
+    const fetchThreadHistory = mockFetchThreadHistory(async () => [
+      { sender: 'Filip', text: 'earlier message', timestamp: '999.1' },
+    ]);
+
+    await withMockAdapter(fetchThreadHistory, async () => {
+      await routeInbound({
+        channelType: 'discord',
+        instance: 'discord-backfill',
+        platformId: 'chan-123',
+        threadId: 'chan-123:3000',
+        message: {
+          id: '3000',
+          kind: 'chat',
+          content: JSON.stringify({ text: 'a top-level message' }),
+          timestamp: now(),
+        },
+      });
+
+      expect(fetchThreadHistory).not.toHaveBeenCalled();
+      const session = findSession('mg-backfill', 'chan-123:3000');
+      expect(session).toBeDefined();
+    });
+  });
+
+  it('does not backfill when the session already exists', async () => {
+    const { routeInbound } = await import('./router.js');
+    const fetchThreadHistory = mockFetchThreadHistory(async () => [
+      { sender: 'Filip', text: 'earlier message', timestamp: '999.1' },
+    ]);
+
+    await withMockAdapter(fetchThreadHistory, async () => {
+      await routeInbound({
+        channelType: 'discord',
+        instance: 'discord-backfill',
+        platformId: 'chan-123',
+        threadId: 'chan-123:1000',
+        message: {
+          id: '2000',
+          kind: 'chat',
+          content: JSON.stringify({ text: 'first reply' }),
+          timestamp: now(),
+        },
+      });
+      expect(fetchThreadHistory).toHaveBeenCalledTimes(1);
+
+      await routeInbound({
+        channelType: 'discord',
+        instance: 'discord-backfill',
+        platformId: 'chan-123',
+        threadId: 'chan-123:1000',
+        message: {
+          id: '2001',
+          kind: 'chat',
+          content: JSON.stringify({ text: 'second reply' }),
+          timestamp: now(),
+        },
+      });
+
+      expect(fetchThreadHistory).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('routes normally when fetchThreadHistory rejects', async () => {
+    const { routeInbound } = await import('./router.js');
+    const fetchThreadHistory = mockFetchThreadHistory(() => Promise.reject(new Error('slack down')));
+
+    await withMockAdapter(fetchThreadHistory, async () => {
+      await expect(
+        routeInbound({
+          channelType: 'discord',
+          instance: 'discord-backfill',
+          platformId: 'chan-123',
+          threadId: 'chan-123:1000',
+          message: {
+            id: '2000',
+            kind: 'chat',
+            content: JSON.stringify({ text: 'a plain reply' }),
+            timestamp: now(),
+          },
+        }),
+      ).resolves.not.toThrow();
+
+      const session = findSession('mg-backfill', 'chan-123:1000');
+      expect(session).toBeDefined();
+      const db = new Database(inboundDbPath('ag-backfill', session!.id));
+      const rows = db.prepare('SELECT id FROM messages_in ORDER BY rowid').all() as Array<{ id: string }>;
+      db.close();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toContain('2000');
+    });
+  });
+});
+
 describe('pattern-toplevel engage mode (coverage backfill)', () => {
   beforeEach(() => {
     createAgentGroup({

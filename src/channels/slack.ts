@@ -26,6 +26,26 @@ import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import { createChatSdkBridge } from './chat-sdk-bridge.js';
 import { registerChannelAdapter } from './channel-registry.js';
+import type { ThreadHistoryMessage } from './adapter.js';
+
+/** Flatten a raw Slack message (text + attachments pretext/title/text/fields/fallback)
+ *  into one text block. Mirrors the thread-root enrichment in
+ *  patches/@chat-adapter__slack@4.27.0.patch so AlertManager payloads survive. */
+export function flattenSlackMessageText(m: Record<string, unknown>): string {
+  const atts = Array.isArray(m.attachments) ? (m.attachments as Array<Record<string, unknown>>) : [];
+  const attText = atts
+    .map((a) => {
+      const fields = Array.isArray(a.fields)
+        ? (a.fields as Array<{ title?: string; value?: string }>)
+            .map((f) => [f.title, f.value].filter(Boolean).join(': '))
+            .join('\n')
+        : '';
+      return [a.pretext, a.title, a.text, fields, a.fallback].filter(Boolean).join('\n');
+    })
+    .filter(Boolean)
+    .join('\n');
+  return [(m.text as string) || '', attText].filter(Boolean).join('\n').trim();
+}
 
 /** Collect every SLACK_BOT_TOKEN[_TEAMID] pair from .env. */
 function collectBotTokens(): { defaultToken?: string; byTeam: Record<string, string> } {
@@ -137,6 +157,69 @@ registerChannelAdapter('slack', {
       })();
     }
 
+    // Recover the thread context predating a session-creating mid-thread
+    // reply. platform ids look like "slack:C123", thread ids like
+    // "slack:C123:1712.34" — channel and thread_ts are the last ':'
+    // segments. withToken resolves the channel-owning workspace token,
+    // which matters for Slack Connect (externally-shared) channels.
+    const fetchThreadHistory = async (
+      platformId: string,
+      threadId: string,
+      limit: number,
+      excludeMessageId?: string,
+    ) => {
+      const channel = platformId.split(':').pop();
+      const threadTs = threadId.split(':').pop();
+      if (!channel || !threadTs) return [];
+      const sa = slackAdapter as unknown as {
+        client: {
+          conversations: {
+            replies(args: Record<string, unknown>): Promise<{
+              ok?: boolean;
+              has_more?: boolean;
+              messages?: Array<Record<string, unknown>>;
+            }>;
+          };
+        };
+        withToken(o: Record<string, unknown>): Promise<Record<string, unknown>>;
+        lookupUser?(id: string): Promise<{ displayName?: string } | null | undefined>;
+      };
+      const res = await sa.client.conversations.replies(await sa.withToken({ channel, ts: threadTs, limit }));
+      if (!res || res.ok === false || !Array.isArray(res.messages)) return [];
+      const names = new Map<string, string>();
+      const out: ThreadHistoryMessage[] = [];
+      for (const m of res.messages) {
+        const ts = m.ts as string | undefined;
+        if (!ts || ts === excludeMessageId) continue;
+        const text = flattenSlackMessageText(m);
+        if (!text) continue;
+        let sender =
+          (m.username as string) ||
+          ((m.bot_profile as { name?: string } | undefined)?.name ?? '') ||
+          (m.user as string) ||
+          'unknown';
+        const uid = m.user as string | undefined;
+        if (uid) {
+          if (!names.has(uid)) {
+            try {
+              names.set(uid, (await sa.lookupUser?.(uid))?.displayName ?? uid);
+            } catch {
+              names.set(uid, uid);
+            }
+          }
+          sender = names.get(uid) as string;
+        }
+        out.push({ sender, text, timestamp: ts });
+      }
+      if (res.has_more) {
+        out.push({
+          sender: 'system',
+          text: `[thread has more than ${limit} messages — only the first ${limit} are included]`,
+        });
+      }
+      return out;
+    };
+
     // Cast: @chat-adapter/slack@4.27.0 bundles chat@4.27.0 while core resolves
     // chat@4.26.0 — a transitive minor skew the sanctioned add-slack skill pins
     // away per-release. The adapter surface the bridge uses is unchanged.
@@ -145,6 +228,7 @@ registerChannelAdapter('slack', {
       concurrency: 'concurrent',
       supportsThreads: true,
       botToken: defaultToken ?? Object.values(byTeam)[0],
+      fetchThreadHistory,
     });
     return bridge;
   },

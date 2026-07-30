@@ -83,6 +83,8 @@ export interface ChatSdkBridgeConfig {
    * and reactions still target the head of the reply.
    */
   maxTextLength?: number;
+  /** Passed through to the resulting bridge as-is. See `ChannelAdapter.fetchThreadHistory`. */
+  fetchThreadHistory?: ChannelAdapter['fetchThreadHistory'];
 }
 
 /**
@@ -553,9 +555,11 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // is resolved and the exact triggering message id is targeted.
       if (typeof (adapter as { addReaction?: unknown }).addReaction !== 'function') return;
       const tid = threadId ?? platformId;
-      await (adapter as unknown as {
-        addReaction(tid: string, messageId: string, emoji: string): Promise<void>;
-      }).addReaction(tid, messageId, emoji);
+      await (
+        adapter as unknown as {
+          addReaction(tid: string, messageId: string, emoji: string): Promise<void>;
+        }
+      ).addReaction(tid, messageId, emoji);
     },
 
     async teardown() {
@@ -594,6 +598,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       return adapter.channelIdFromThreadId(threadId);
     };
   }
+
+  if (config.fetchThreadHistory) bridge.fetchThreadHistory = config.fetchThreadHistory;
 
   return bridge;
 }

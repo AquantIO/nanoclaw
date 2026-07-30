@@ -33,7 +33,7 @@ import { resolveSession, writeSessionMessage, writeOutboundDirect } from './sess
 import { wakeContainer } from './container-runner.js';
 import { getSession } from './db/sessions.js';
 import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
-import type { InboundEvent } from './channels/adapter.js';
+import type { ChannelAdapter, InboundEvent } from './channels/adapter.js';
 
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -302,7 +302,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     const scopeOk = engages && (!senderScopeGate || senderScopeGate(event, userId, mg, agent).allowed);
 
     if (engages && accessOk && scopeOk) {
-      await deliverToAgent(agent, agentGroup, mg, event, userId, adapter?.supportsThreads === true, true);
+      await deliverToAgent(agent, agentGroup, mg, event, userId, adapter, isTopLevel, true);
       engagedCount++;
 
       // Host-side acknowledgement. The moment the first wiring engages on a
@@ -354,7 +354,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       // message (which also stages their attachments to disk via
       // writeSessionMessage → extractAttachmentFiles) is exactly what the
       // gate is meant to prevent.
-      await deliverToAgent(agent, agentGroup, mg, event, userId, adapter?.supportsThreads === true, false);
+      await deliverToAgent(agent, agentGroup, mg, event, userId, adapter, isTopLevel, false);
       accumulatedCount++;
     } else {
       log.debug('Message not engaged for agent (drop policy)', {
@@ -481,7 +481,8 @@ async function deliverToAgent(
   mg: MessagingGroup,
   event: InboundEvent,
   userId: string | null,
-  adapterSupportsThreads: boolean,
+  adapter: ChannelAdapter | undefined,
+  isTopLevel: boolean,
   wake: boolean,
 ): Promise<void> {
   // Apply the adapter thread policy: threaded adapter in a group chat →
@@ -489,7 +490,7 @@ async function deliverToAgent(
   // a cross-channel directive the adapter doesn't know about). DMs collapse
   // sub-threads to one session (is_group=0 short-circuit).
   let effectiveSessionMode = agent.session_mode;
-  if (adapterSupportsThreads && effectiveSessionMode !== 'agent-shared' && mg.is_group !== 0) {
+  if (adapter?.supportsThreads === true && effectiveSessionMode !== 'agent-shared' && mg.is_group !== 0) {
     effectiveSessionMode = 'per-thread';
   }
 
@@ -504,6 +505,43 @@ async function deliverToAgent(
     platformId: event.platformId,
     threadId: event.threadId,
   };
+
+  // One-time thread-history backfill: when THIS event just created the
+  // session and the message is a mid-thread reply, the agent is joining a
+  // conversation it hasn't seen. Fetch the earlier messages once and write
+  // them as a single trigger=0 context row AHEAD of the event's own row.
+  // Best-effort — on failure the agent still has the thread root from the
+  // adapter-level enrichment. Fires at most once per session ever (created
+  // is true exactly once), for both engaged and accumulated deliveries.
+  if (created && event.threadId !== null && !isTopLevel && mg.is_group !== 0 && adapter?.fetchThreadHistory) {
+    try {
+      const history = await adapter.fetchThreadHistory(event.platformId, event.threadId, 50, event.message.id);
+      if (history.length > 0) {
+        const transcript = history
+          .map((m) => `${m.timestamp ? `[${m.timestamp}] ` : ''}${m.sender}: ${m.text}`)
+          .join('\n');
+        writeSessionMessage(session.agent_group_id, session.id, {
+          id: messageIdForAgent(`backfill-${event.message.id}`, agent.agent_group_id),
+          kind: event.message.kind,
+          timestamp: event.message.timestamp,
+          platformId: deliveryAddr.platformId,
+          channelType: deliveryAddr.channelType,
+          threadId: deliveryAddr.threadId,
+          content: JSON.stringify({
+            sender: 'Thread history',
+            text: `[Earlier messages in this thread, oldest first — backfilled when you joined mid-thread]\n${transcript}`,
+          }),
+          trigger: 0,
+        });
+      }
+    } catch (err) {
+      log.warn('Thread-history backfill failed — continuing without it', {
+        threadId: event.threadId,
+        agentGroupId: agent.agent_group_id,
+        err,
+      });
+    }
+  }
 
   // Command gate: classify slash commands before they reach the container.
   // Filtered commands are dropped silently. Denied admin commands get a

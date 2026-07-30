@@ -110,6 +110,14 @@ export interface ConversationInfo {
   isGroup: boolean;
 }
 
+/** One earlier message recovered from a thread-history backfill. */
+export interface ThreadHistoryMessage {
+  sender: string;
+  text: string;
+  /** Platform-native timestamp (Slack ts). Best-effort. */
+  timestamp?: string;
+}
+
 /** The v2 channel adapter contract. */
 export interface ChannelAdapter {
   name: string;
@@ -187,6 +195,21 @@ export interface ChannelAdapter {
    * Returning the same platform_id on repeated calls is expected.
    */
   openDM?(userHandle: string): Promise<string>;
+
+  /**
+   * Fetch the messages that precede a given point in a thread. Called by
+   * the router once per session, when a session is created by a
+   * NON-top-level message, to give the agent the thread context that
+   * predates it — best-effort. Platforms without a thread-history concept
+   * (or that already surface it another way) can omit this; the router
+   * treats absence as a no-op.
+   */
+  fetchThreadHistory?(
+    platformId: string,
+    threadId: string,
+    limit: number,
+    excludeMessageId?: string,
+  ): Promise<ThreadHistoryMessage[]>;
 }
 
 /** Factory function that creates a channel adapter (returns null if credentials missing). */
