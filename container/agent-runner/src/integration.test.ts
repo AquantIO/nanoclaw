@@ -213,8 +213,11 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
-  it('resolves most recent thread_id when destination has multiple inbound messages', async () => {
-    // Two messages from same destination, different threads
+  it('replies to the answered batch thread, not the most recent inbound row', async () => {
+    // Two messages from the same destination on different threads. The reply
+    // is addressed from the batch being answered (its first message), NOT
+    // from the newest messages_in row — a message landing on thread B while
+    // the agent is answering thread A must not hijack A's reply into B.
     insertMessage('m-old', { sender: 'Alice', text: 'old' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-old' });
     insertMessage('m-new', { sender: 'Alice', text: 'new' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-new' });
 
@@ -227,8 +230,8 @@ describe('poll loop integration', () => {
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
-    expect(out[0].thread_id).toBe('thread-new');
-    expect(out[0].in_reply_to).toBe('m-new');
+    expect(out[0].thread_id).toBe('thread-old');
+    expect(out[0].in_reply_to).toBe('m-old');
 
     await loopPromise.catch(() => {});
   });
