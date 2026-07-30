@@ -186,31 +186,40 @@ registerChannelAdapter('slack', {
       };
       const res = await sa.client.conversations.replies(await sa.withToken({ channel, ts: threadTs, limit }));
       if (!res || res.ok === false || !Array.isArray(res.messages)) return [];
-      const names = new Map<string, string>();
-      const out: ThreadHistoryMessage[] = [];
-      for (const m of res.messages) {
-        const ts = m.ts as string | undefined;
-        if (!ts || ts === excludeMessageId) continue;
-        const text = flattenSlackMessageText(m);
-        if (!text) continue;
-        let sender =
+
+      // Filter down to the messages we'll actually emit BEFORE resolving any
+      // sender names — avoids wasting a lookup on a message we'll drop anyway.
+      const kept = res.messages
+        .map((m) => ({ m, ts: m.ts as string | undefined, text: flattenSlackMessageText(m) }))
+        .filter(({ ts, text }) => ts && ts !== excludeMessageId && text);
+
+      // Resolve every distinct sender in parallel rather than serially inside
+      // the message loop — a thread with N distinct senders would otherwise
+      // pay N sequential round-trips, stalling the container wake behind it.
+      // Each lookup is individually try/caught so one bad id can't sink the
+      // rest; falls back to the raw uid on failure or absence.
+      const uids = [...new Set(kept.map(({ m }) => m.user as string | undefined).filter((u): u is string => !!u))];
+      const names = new Map<string, string>(
+        await Promise.all(
+          uids.map(async (uid): Promise<[string, string]> => {
+            try {
+              return [uid, (await sa.lookupUser?.(uid))?.displayName ?? uid];
+            } catch {
+              return [uid, uid];
+            }
+          }),
+        ),
+      );
+
+      const out: ThreadHistoryMessage[] = kept.map(({ m, ts, text }) => {
+        const uid = m.user as string | undefined;
+        const sender =
           (m.username as string) ||
           ((m.bot_profile as { name?: string } | undefined)?.name ?? '') ||
-          (m.user as string) ||
+          (uid ? (names.get(uid) as string) : '') ||
           'unknown';
-        const uid = m.user as string | undefined;
-        if (uid) {
-          if (!names.has(uid)) {
-            try {
-              names.set(uid, (await sa.lookupUser?.(uid))?.displayName ?? uid);
-            } catch {
-              names.set(uid, uid);
-            }
-          }
-          sender = names.get(uid) as string;
-        }
-        out.push({ sender, text, timestamp: ts });
-      }
+        return { sender, text, timestamp: ts };
+      });
       if (res.has_more) {
         out.push({
           sender: 'system',
