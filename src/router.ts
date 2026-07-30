@@ -542,7 +542,10 @@ async function deliverToAgent(
           .join('\n');
         writeSessionMessage(session.agent_group_id, session.id, {
           id: messageIdForAgent(`backfill-${event.message.id}`, agent.agent_group_id),
-          kind: event.message.kind,
+          // Always 'chat': the content below is a plain {sender, text} blob we
+          // construct here, not a serialization of event.message (which may be
+          // 'chat-sdk' or another kind).
+          kind: 'chat',
           timestamp: event.message.timestamp,
           platformId: deliveryAddr.platformId,
           channelType: deliveryAddr.channelType,

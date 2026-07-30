@@ -246,7 +246,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // router (src/router.ts routeInbound / evaluateEngage). The bridge
       // only resolves channel ids and sets the platform-confirmed isMention
       // flag that routeInbound evaluates; the router calls back into
-      // bridge.subscribe(...) when a mention-sticky wiring engages.
+      // bridge.subscribe(...) when a mention-sticky or conversational wiring engages.
 
       // Subscribed threads — every message in a thread we've previously
       // engaged. Carry the SDK's `message.isMention` through so mention-mode
