@@ -806,6 +806,53 @@ describe('conversational engage mode', () => {
 
     expect(wakeContainer).not.toHaveBeenCalled();
   });
+
+  it('subscribes the thread on first engage', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { registerChannelAdapter, initChannelAdapters, teardownChannelAdapters } =
+      await import('./channels/channel-registry.js');
+
+    const subscribeSpy = vi.fn().mockResolvedValue(undefined);
+    const adapter = {
+      name: 'discord',
+      channelType: 'discord',
+      instance: undefined,
+      supportsThreads: true,
+      async setup() {},
+      async teardown() {},
+      isConnected: () => true,
+      async deliver() {
+        return undefined;
+      },
+      subscribe: subscribeSpy,
+    };
+    registerChannelAdapter('discord', { factory: () => adapter });
+    await initChannelAdapters(() => ({
+      onInbound: () => {},
+      onInboundEvent: () => {},
+      onMetadata: () => {},
+      onAction: () => {},
+    }));
+
+    try {
+      await routeInbound({
+        channelType: 'discord',
+        platformId: 'chan-123',
+        threadId: 'chan-123:1000',
+        message: {
+          id: '2005',
+          kind: 'chat',
+          content: JSON.stringify({ text: '@bot can you help' }),
+          timestamp: now(),
+          isMention: true,
+        },
+      });
+
+      expect(subscribeSpy).toHaveBeenCalledWith('chan-123', 'chan-123:1000');
+    } finally {
+      await teardownChannelAdapters();
+    }
+  });
 });
 
 describe('pattern-toplevel engage mode (coverage backfill)', () => {

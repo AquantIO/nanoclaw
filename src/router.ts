@@ -369,15 +369,16 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
           );
       }
 
-      // Mention-sticky: ask the adapter to subscribe the thread so the
-      // platform's subscribed-message path carries follow-ups without
-      // requiring another @mention. Uses this wiring's OWN effective thread
-      // id — a non-null value already implies the adapter supports threads
-      // (resolveThreadPolicy hard-ANDs the capability). DMs, non-threaded
-      // platforms, and thread-opted-out wirings skip.
+      // Mention-sticky / conversational: ask the adapter to subscribe the
+      // thread so the platform's subscribed-message path carries follow-ups
+      // without requiring another @mention. Uses this wiring's OWN effective
+      // thread id — a non-null value already implies the adapter supports
+      // threads (resolveThreadPolicy hard-ANDs the capability), so no separate
+      // supportsThreads check. DMs, non-threaded platforms, and thread-opted-out
+      // wirings skip.
       if (
         !subscribed &&
-        agent.engage_mode === 'mention-sticky' &&
+        (agent.engage_mode === 'mention-sticky' || agent.engage_mode === 'conversational') &&
         adapter?.subscribe &&
         effectiveThreadId !== null &&
         mg.is_group !== 0
