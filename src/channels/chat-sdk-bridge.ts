@@ -23,6 +23,7 @@ import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
 import { getAskQuestionRender } from '../db/sessions.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
+import { astToPlainText } from './plain-text.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -158,6 +159,12 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
   ): Promise<InboundMessage> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const serialized = message.toJSON() as Record<string, any>;
+
+    // Re-derive `text` from the AST with block separators intact. The SDK's
+    // own flattening drops them, which both breaks engage_pattern matching in
+    // the router and mangles the agent's prompt. See plain-text.ts.
+    const blockAwareText = astToPlainText(serialized.formatted);
+    if (blockAwareText !== null) serialized.text = blockAwareText;
 
     // Download attachment data before serialization loses fetchData()
     if (message.attachments && message.attachments.length > 0) {
