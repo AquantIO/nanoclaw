@@ -43,6 +43,26 @@ export function isCorruptionError(msg: string): boolean {
   );
 }
 
+/**
+ * Accumulate gate: is there anything in this batch the agent is allowed to
+ * wake for?
+ *
+ * Rows stored under `ignored_message_policy='accumulate'` land with
+ * `trigger=0` — they are context the agent should SEE, never a reason for it
+ * to SPEAK. `getPendingMessages()` deliberately returns them alongside
+ * trigger=1 rows so they ride along in the next real turn's prompt, which
+ * means every intake site has to apply this gate itself. Host-side
+ * `countDueMessages` gates wake-from-cold the same way (src/db/session-db.ts).
+ *
+ * Shared by both intake paths — the outer cold/idle loop and the concurrent
+ * mid-turn poller. Keeping it in one function is the point: the mid-turn
+ * poller shipped without the check and answered every un-mentioned Slack
+ * reply for as long as its stream stayed open (2026-08-02).
+ */
+export function hasWakeTrigger(messages: MessageInRow[]): boolean {
+  return messages.some((m) => m.trigger === 1);
+}
+
 function log(msg: string): void {
   console.error(`[poll-loop] ${msg}`);
 }
@@ -129,15 +149,9 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       continue;
     }
 
-    // Accumulate gate: if the batch contains only trigger=0 rows
-    // (context-only, router-stored under ignored_message_policy='accumulate'),
-    // don't wake the agent. Leave them `pending` — they'll ride along the
-    // next time a real trigger=1 message lands via this same getPendingMessages
-    // query. Without this gate, a warm container keeps processing
-    // (and potentially responding to) every accumulate-only batch, defeating
-    // the "store as context, don't engage" contract. Host-side countDueMessages
-    // gates the same way for wake-from-cold (see src/db/session-db.ts).
-    if (!messages.some((m) => m.trigger === 1)) {
+    // Accumulate gate — see hasWakeTrigger(). Accumulate-only batches stay
+    // `pending` and ride along the next trigger=1 turn.
+    if (!hasWakeTrigger(messages)) {
       await sleep(POLL_INTERVAL_MS);
       continue;
     }
@@ -394,6 +408,14 @@ export async function processQuery(
         // host-generated welcome trigger with null thread vs a Discord DM reply).
         const newMessages = pending.filter((m) => m.kind !== 'system');
         if (newMessages.length === 0) return;
+
+        // Accumulate gate — same contract as the outer loop. An open stream
+        // must NOT turn context-only rows into live turns: without this, a
+        // warm container answers every un-mentioned message in the thread for
+        // as long as the query stays open (and it stays open on purpose — see
+        // the comment above). Leave them pending; they ride along the next
+        // trigger=1 batch, whichever intake path picks it up.
+        if (!hasWakeTrigger(newMessages)) return;
 
         const newIds = newMessages.map((m) => m.id);
         markProcessing(newIds);
