@@ -4,7 +4,7 @@ import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from '
 import { getPendingMessages, markCompleted } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
-import { isCorruptionError, processQuery } from './poll-loop.js';
+import { hasWakeTrigger, isCorruptionError, processQuery } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
 import type { AgentQuery, ProviderEvent } from './providers/types.js';
 
@@ -108,22 +108,37 @@ describe('accumulate gate (trigger column)', () => {
     expect(byId.m2.trigger).toBe(1);
   });
 
-  it('trigger=0-only batch: gate predicate `some(trigger===1)` is false', () => {
+  it('trigger=0-only batch: hasWakeTrigger is false', () => {
     insertMessage('m1', 'chat', { sender: 'A', text: 'noise' }, { trigger: 0 });
     insertMessage('m2', 'chat', { sender: 'B', text: 'more noise' }, { trigger: 0 });
     const messages = getPendingMessages();
-    // This is the exact predicate the poll loop uses to skip accumulate-only
-    // batches — gate should be false, so the loop sleeps without waking the agent.
-    expect(messages.some((m) => m.trigger === 1)).toBe(false);
+    // Gate is false, so the loop sleeps without waking the agent.
+    expect(hasWakeTrigger(messages)).toBe(false);
   });
 
   it('mixed batch: gate is true → loop proceeds, accumulated rows ride along', () => {
     insertMessage('m1', 'chat', { sender: 'A', text: 'earlier chatter' }, { trigger: 0 });
     insertMessage('m2', 'chat', { sender: 'B', text: 'the real mention' }, { trigger: 1 });
     const messages = getPendingMessages();
-    expect(messages.some((m) => m.trigger === 1)).toBe(true);
+    expect(hasWakeTrigger(messages)).toBe(true);
     // Both messages are present for the formatter → agent sees the prior context.
     expect(messages.map((m) => m.id).sort()).toEqual(['m1', 'm2']);
+  });
+
+  it('gates the mid-turn follow-up path too, not just the outer loop', () => {
+    // Regression: the concurrent poller that pushes follow-ups into an ACTIVE
+    // query had no gate, so a warm container answered every un-mentioned reply
+    // for as long as its stream stayed open. Both intake paths call
+    // hasWakeTrigger() on the same getPendingMessages() batch — the arrival of
+    // accumulate-only rows during a live turn must not produce a new turn.
+    insertMessage('m1', 'chat', { sender: 'A', text: 'the mention' }, { trigger: 1 });
+    markCompleted(['m1']); // already picked up by the turn that is in flight
+
+    insertMessage('m2', 'chat', { sender: 'B', text: 'untagged follow-up' }, { trigger: 0 });
+    const midTurnBatch = getPendingMessages().filter((m) => m.kind !== 'system');
+
+    expect(midTurnBatch.map((m) => m.id)).toEqual(['m2']);
+    expect(hasWakeTrigger(midTurnBatch)).toBe(false);
   });
 
   it('trigger column defaults to 1 for legacy inserts without explicit value', () => {
