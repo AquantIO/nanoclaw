@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index e1d9675be93dfbd8a1e128edb9c2db0448b18109..ed05e500ff0cdcf8533fd175d79e761e15c548d6 100644
+index e1d9675..0e199e3 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -865,8 +865,34 @@ var SlackAdapter = class _SlackAdapter {
@@ -158,3 +158,65 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..ed05e500ff0cdcf8533fd175d79e761e
      let userName = event.username || "unknown";
      let fullName = event.username || "unknown";
      if (event.user && !event.username) {
+@@ -3435,6 +3529,61 @@ var SlackAdapter = class _SlackAdapter {
+       this.handleSlackError(error);
+     }
+   }
++  async pinMessage(threadId, messageId, unpinPrevious) {
++    const { channel } = this.decodeThreadId(threadId);
++    if (unpinPrevious) {
++      try {
++        const list = await this.client.pins.list(await this.withToken({ channel }));
++        const own = await this.__aqOwnUserId(channel);
++        for (const item of (list && list.items) || []) {
++          const ts = item.message && item.message.ts;
++          if (!ts || ts === messageId) continue;
++          if (!own || item.created_by !== own) continue;
++          try {
++            await this.client.pins.remove(await this.withToken({ channel, timestamp: ts }));
++            this.logger.debug("Slack API: pins.remove (rolling)", { channel, ts });
++          } catch (e) {
++            this.logger.warn("Slack API: pins.remove failed", { channel, ts });
++          }
++        }
++      } catch (e) {
++        this.logger.warn("Slack API: pins.list failed - skipping unpin-previous", { channel });
++      }
++    }
++    try {
++      this.logger.debug("Slack API: pins.add", { channel, messageId });
++      await this.client.pins.add(await this.withToken({ channel, timestamp: messageId }));
++    } catch (error) {
++      const code = error && error.data && error.data.error;
++      if (code === "already_pinned") return;
++      this.handleSlackError(error);
++    }
++  }
++  async unpinMessage(threadId, messageId) {
++    const { channel } = this.decodeThreadId(threadId);
++    try {
++      this.logger.debug("Slack API: pins.remove", { channel, messageId });
++      await this.client.pins.remove(await this.withToken({ channel, timestamp: messageId }));
++    } catch (error) {
++      const code = error && error.data && error.data.error;
++      if (code === "no_pin" || code === "not_pinned") return;
++      this.handleSlackError(error);
++    }
++  }
++  async __aqOwnUserId(channel) {
++    try {
++      this.__aqOwnIds = this.__aqOwnIds || new Map();
++      const opts = await this.withToken({ channel });
++      const tok = opts.token;
++      if (this.__aqOwnIds.has(tok)) return this.__aqOwnIds.get(tok);
++      const r = await this.client.auth.test({ token: tok });
++      const id = r && r.ok ? r.user_id : null;
++      this.__aqOwnIds.set(tok, id);
++      return id;
++    } catch {
++      return null;
++    }
++  }
+   /**
+    * Show typing indicator with optional custom status.
+    *

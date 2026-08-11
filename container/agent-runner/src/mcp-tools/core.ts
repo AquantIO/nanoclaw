@@ -260,4 +260,87 @@ export const addReaction: McpToolDefinition = {
   },
 };
 
-registerTools([sendMessage, sendFile, editMessage, addReaction]);
+export const pinMessage: McpToolDefinition = {
+  tool: {
+    name: 'pin_message',
+    description: 'Pin a message in its channel. By default also unpins THIS BOT\'s previous pins there (rolling pin — human pins are never touched). Requires pins:write on the Slack app.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        messageId: { type: 'integer', description: 'Message ID (the numeric id shown in messages)' },
+        unpin_previous: { type: 'boolean', description: 'Unpin the bot\'s previous pins in the channel first (default true)' },
+      },
+      required: ['messageId'],
+    },
+  },
+  async handler(args) {
+    const seq = Number(args.messageId);
+    if (!seq) return err('messageId is required');
+
+    const platformId = getMessageIdBySeq(seq);
+    if (!platformId) return err(`Message #${seq} not found`);
+
+    const routing = getRoutingBySeq(seq);
+    if (!routing || !routing.channel_type || !routing.platform_id) {
+      return err(`Cannot determine destination for message #${seq}`);
+    }
+
+    const id = generateId();
+    writeMessageOut({
+      id,
+      kind: 'chat',
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: routing.thread_id,
+      content: JSON.stringify({
+        operation: 'pin',
+        messageId: platformId,
+        unpinPrevious: args.unpin_previous !== false,
+      }),
+    });
+
+    log(`pin_message: #${seq} → ${platformId}`);
+    return ok(`Pin queued for #${seq}`);
+  },
+};
+
+export const unpinMessage: McpToolDefinition = {
+  tool: {
+    name: 'unpin_message',
+    description: 'Remove a pin from a message this bot pinned.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        messageId: { type: 'integer', description: 'Message ID (the numeric id shown in messages)' },
+      },
+      required: ['messageId'],
+    },
+  },
+  async handler(args) {
+    const seq = Number(args.messageId);
+    if (!seq) return err('messageId is required');
+
+    const platformId = getMessageIdBySeq(seq);
+    if (!platformId) return err(`Message #${seq} not found`);
+
+    const routing = getRoutingBySeq(seq);
+    if (!routing || !routing.channel_type || !routing.platform_id) {
+      return err(`Cannot determine destination for message #${seq}`);
+    }
+
+    const id = generateId();
+    writeMessageOut({
+      id,
+      kind: 'chat',
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: routing.thread_id,
+      content: JSON.stringify({ operation: 'unpin', messageId: platformId }),
+    });
+
+    log(`unpin_message: #${seq} → ${platformId}`);
+    return ok(`Unpin queued for #${seq}`);
+  },
+};
+
+registerTools([sendMessage, sendFile, editMessage, addReaction, pinMessage, unpinMessage]);

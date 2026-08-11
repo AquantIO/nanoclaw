@@ -427,6 +427,36 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         return;
       }
 
+      // Pin/unpin (DEVOPS-757) — adapter support is optional (Slack has it via
+      // the @chat-adapter/slack patch). Failures degrade to an unpinned
+      // message, never a crashed delivery: the post itself already landed.
+      if ((content.operation === 'pin' || content.operation === 'unpin') && content.messageId) {
+        const pinnable = adapter as unknown as {
+          pinMessage?: (tid: string, mid: string, unpinPrevious?: boolean) => Promise<void>;
+          unpinMessage?: (tid: string, mid: string) => Promise<void>;
+        };
+        const fn = content.operation === 'pin' ? pinnable.pinMessage : pinnable.unpinMessage;
+        if (!fn) {
+          log.warn('pin/unpin requested but adapter does not support it — skipping', {
+            adapter: adapter.name, operation: content.operation,
+          });
+          return;
+        }
+        try {
+          if (content.operation === 'pin') {
+            await pinnable.pinMessage!.call(adapter, tid, content.messageId as string,
+              content.unpinPrevious !== false);
+          } else {
+            await pinnable.unpinMessage!.call(adapter, tid, content.messageId as string);
+          }
+        } catch (err) {
+          log.warn('pin/unpin failed — message left as-is', {
+            operation: content.operation, err,
+          });
+        }
+        return;
+      }
+
       // Ask question card — render as Card with buttons
       if (content.type === 'ask_question' && content.questionId && content.options) {
         const questionId = content.questionId as string;
