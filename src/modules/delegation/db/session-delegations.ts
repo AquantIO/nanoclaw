@@ -38,9 +38,7 @@ function toDelegation(r: Row): Delegation {
 }
 
 export function getDelegation(chatKey: string): Delegation | undefined {
-  const row = getDb().prepare('SELECT * FROM session_delegations WHERE chat_key = ?').get(chatKey) as
-    | Row
-    | undefined;
+  const row = getDb().prepare('SELECT * FROM session_delegations WHERE chat_key = ?').get(chatKey) as Row | undefined;
   return row ? toDelegation(row) : undefined;
 }
 
@@ -84,9 +82,7 @@ export function deleteDelegation(chatKey: string): void {
 export function expireStaleDelegations(maxIdleMs: number): Delegation[] {
   const cutoff = new Date(Date.now() - maxIdleMs).toISOString();
   const db = getDb();
-  const stale = db
-    .prepare('SELECT * FROM session_delegations WHERE last_activity < ?')
-    .all(cutoff) as Row[];
+  const stale = db.prepare('SELECT * FROM session_delegations WHERE last_activity < ?').all(cutoff) as Row[];
   if (stale.length > 0) {
     db.prepare('DELETE FROM session_delegations WHERE last_activity < ?').run(cutoff);
   }

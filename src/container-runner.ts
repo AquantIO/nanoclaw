@@ -558,7 +558,10 @@ async function buildContainerArgs(
     args.push('-e', `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=${otelVars.LANGFUSE_OTEL_ENDPOINT}/v1/metrics`);
     args.push('-e', 'OTEL_LOG_LEVEL=debug');
     args.push('-e', `OTEL_SERVICE_NAME=${agentSlug}`);
-    args.push('-e', 'OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production,service.namespace=aquant-devops-agents');
+    args.push(
+      '-e',
+      'OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production,service.namespace=aquant-devops-agents',
+    );
     log.info('Langfuse OTEL env forwarded to agent container', { containerName, agentSlug });
   }
 
@@ -613,8 +616,7 @@ async function buildContainerArgs(
     .map((g) => g.trim())
     .filter(Boolean);
   const foundryEnabled =
-    !!foundry.ANTHROPIC_FOUNDRY_RESOURCE &&
-    (foundryGroups.length === 0 || foundryGroups.includes(agentGroup.folder));
+    !!foundry.ANTHROPIC_FOUNDRY_RESOURCE && (foundryGroups.length === 0 || foundryGroups.includes(agentGroup.folder));
   if (foundryEnabled) {
     args.push('-e', 'CLAUDE_CODE_USE_FOUNDRY=1');
     args.push('-e', `ANTHROPIC_FOUNDRY_RESOURCE=${foundry.ANTHROPIC_FOUNDRY_RESOURCE}`);

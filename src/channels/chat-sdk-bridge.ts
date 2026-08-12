@@ -447,20 +447,21 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         const fn = content.operation === 'pin' ? pinnable.pinMessage : pinnable.unpinMessage;
         if (!fn) {
           log.warn('pin/unpin requested but adapter does not support it — skipping', {
-            adapter: adapter.name, operation: content.operation,
+            adapter: adapter.name,
+            operation: content.operation,
           });
           return;
         }
         try {
           if (content.operation === 'pin') {
-            await pinnable.pinMessage!.call(adapter, tid, content.messageId as string,
-              content.unpinPrevious !== false);
+            await pinnable.pinMessage!.call(adapter, tid, content.messageId as string, content.unpinPrevious !== false);
           } else {
             await pinnable.unpinMessage!.call(adapter, tid, content.messageId as string);
           }
         } catch (err) {
           log.warn('pin/unpin failed — message left as-is', {
-            operation: content.operation, err,
+            operation: content.operation,
+            err,
           });
         }
         return;

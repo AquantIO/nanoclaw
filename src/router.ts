@@ -301,8 +301,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   // the encoded threadId ends with the thread root ts; a top-level message's
   // own id equals that root, a reply's does not. Null threadId (non-threaded
   // / DM) counts as top-level. Consumed by the 'pattern-toplevel' engage mode.
-  const isTopLevel =
-    event.threadId === null || event.threadId.endsWith(`:${event.message.id}`);
+  const isTopLevel = event.threadId === null || event.threadId.endsWith(`:${event.message.id}`);
 
   // Per-wiring thread policy inputs, resolved once per event. Each wiring's
   // threads override (NULL = inherit) resolves against the channel's declared
@@ -346,7 +345,16 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
 
     if (engages && accessOk && scopeOk) {
       await deliverToAgent(
-        agent, agentGroup, mg, event, userId, threadsEnabled, effectiveThreadId, adapter, isTopLevel, true,
+        agent,
+        agentGroup,
+        mg,
+        event,
+        userId,
+        threadsEnabled,
+        effectiveThreadId,
+        adapter,
+        isTopLevel,
+        true,
       );
       engagedCount++;
 
@@ -359,16 +367,14 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       // skipped (the agent replies directly there, so an ack would be noise).
       if (!reacted && isMention && mg.is_group !== 0 && adapter?.react) {
         reacted = true;
-        void adapter
-          .react(event.platformId, event.threadId, event.message.id, 'eyes')
-          .catch((err) =>
-            log.warn('Host-side :eyes: ack failed', {
-              channelType: event.channelType,
-              platformId: event.platformId,
-              messageId: event.message.id,
-              err,
-            }),
-          );
+        void adapter.react(event.platformId, event.threadId, event.message.id, 'eyes').catch((err) =>
+          log.warn('Host-side :eyes: ack failed', {
+            channelType: event.channelType,
+            platformId: event.platformId,
+            messageId: event.message.id,
+            err,
+          }),
+        );
       }
 
       // Mention-sticky / conversational: ask the adapter to subscribe the
@@ -402,7 +408,16 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       // writeSessionMessage → extractAttachmentFiles) is exactly what the
       // gate is meant to prevent.
       await deliverToAgent(
-        agent, agentGroup, mg, event, userId, threadsEnabled, effectiveThreadId, adapter, isTopLevel, false,
+        agent,
+        agentGroup,
+        mg,
+        event,
+        userId,
+        threadsEnabled,
+        effectiveThreadId,
+        adapter,
+        isTopLevel,
+        false,
       );
       accumulatedCount++;
     } else {

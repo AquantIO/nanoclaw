@@ -18,7 +18,8 @@
  * aware, so Aquant and GlobalDots Slack instances stay independent.
  */
 import { registerDeliveryAction } from '../../delivery.js';
-import { setMessageInterceptor } from '../../router.js';
+import { registerMessageInterceptor } from '../../router.js';
+import { unguarded } from '../../guard/index.js';
 import { getAgentGroup, getAgentGroupByFolder } from '../../db/agent-groups.js';
 import { getMessagingGroup } from '../../db/messaging-groups.js';
 import { getSession, getSessionsByAgentGroup } from '../../db/sessions.js';
@@ -35,7 +36,13 @@ import {
   normalizeName,
 } from '../agent-to-agent/db/agent-destinations.js';
 import { writeDestinations } from '../agent-to-agent/write-destinations.js';
-import { deleteDelegation, expireStaleDelegations, getDelegation, setDelegation, touchDelegation } from './db/session-delegations.js';
+import {
+  deleteDelegation,
+  expireStaleDelegations,
+  getDelegation,
+  setDelegation,
+  touchDelegation,
+} from './db/session-delegations.js';
 
 const IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2h, matches v1
 
@@ -107,7 +114,7 @@ async function deliverToTarget(
 }
 
 // --- Pre-route interceptor: hijack delegated chats before fan-out. ---
-setMessageInterceptor(async (event: InboundEvent): Promise<boolean> => {
+registerMessageInterceptor(async (event: InboundEvent): Promise<boolean> => {
   if (!hasTable(getDb(), 'session_delegations')) return false;
   const key = chatKey(event.channelType, event.instance, event.platformId);
   const del = getDelegation(key);
@@ -140,68 +147,78 @@ setMessageInterceptor(async (event: InboundEvent): Promise<boolean> => {
 });
 
 // --- `delegate`: Router binds the current chat to a target agent group. ---
-registerDeliveryAction('delegate', async (content, session) => {
-  const targetFolder = String(content.targetFolder ?? content.target ?? '').trim();
-  if (!targetFolder) {
-    log.warn('delegate failed: targetFolder missing', { agentGroup: session.agent_group_id });
-    return;
-  }
-  const target = getAgentGroupByFolder(targetFolder);
-  if (!target) {
-    log.warn('delegate failed: unknown target folder', { targetFolder, agentGroup: session.agent_group_id });
-    return;
-  }
-  if (!session.messaging_group_id) {
-    log.warn('delegate failed: emitting session has no messaging group', { agentGroup: session.agent_group_id });
-    return;
-  }
-  const mg = getMessagingGroup(session.messaging_group_id);
-  if (!mg) {
-    log.warn('delegate failed: messaging group not found', { mgId: session.messaging_group_id });
-    return;
-  }
-  const key = chatKeyForMg(mg);
-  setDelegation({
-    chatKey: key,
-    targetAgentGroupId: target.id,
-    originAgentGroupId: session.agent_group_id,
-    messagingGroupId: mg.id,
-    delegatedBy: session.agent_group_id,
-  });
-  ensureChannelDestination(target.id, mg);
-  log.info('Delegation set', { chatKey: key, target: target.folder, origin: session.agent_group_id });
-
-  // Optional replay: hand the user's request straight to the target so it acts
-  // immediately instead of waiting for the next inbound message.
-  const replay = typeof content.message === 'string' ? content.message : null;
-  if (replay) {
-    try {
-      await deliverToTarget(target.id, mg.id, null, {
-        id: newMsgId('dlg-replay'),
-        kind: 'chat',
-        timestamp: new Date().toISOString(),
-        channelType: mg.channel_type,
-        platformId: mg.platform_id,
-        content: JSON.stringify({ text: replay }),
-      });
-      log.info('Delegation replay forwarded', { chatKey: key, target: target.folder });
-    } catch (err) {
-      log.error('Delegation replay failed', { chatKey: key, err });
+registerDeliveryAction(
+  'delegate',
+  async (content, session) => {
+    const targetFolder = String(content.targetFolder ?? content.target ?? '').trim();
+    if (!targetFolder) {
+      log.warn('delegate failed: targetFolder missing', { agentGroup: session.agent_group_id });
+      return;
     }
-  }
-});
+    const target = getAgentGroupByFolder(targetFolder);
+    if (!target) {
+      log.warn('delegate failed: unknown target folder', { targetFolder, agentGroup: session.agent_group_id });
+      return;
+    }
+    if (!session.messaging_group_id) {
+      log.warn('delegate failed: emitting session has no messaging group', { agentGroup: session.agent_group_id });
+      return;
+    }
+    const mg = getMessagingGroup(session.messaging_group_id);
+    if (!mg) {
+      log.warn('delegate failed: messaging group not found', { mgId: session.messaging_group_id });
+      return;
+    }
+    const key = chatKeyForMg(mg);
+    setDelegation({
+      chatKey: key,
+      targetAgentGroupId: target.id,
+      originAgentGroupId: session.agent_group_id,
+      messagingGroupId: mg.id,
+      delegatedBy: session.agent_group_id,
+    });
+    ensureChannelDestination(target.id, mg);
+    log.info('Delegation set', { chatKey: key, target: target.folder, origin: session.agent_group_id });
+
+    // Optional replay: hand the user's request straight to the target so it acts
+    // immediately instead of waiting for the next inbound message.
+    const replay = typeof content.message === 'string' ? content.message : null;
+    if (replay) {
+      try {
+        await deliverToTarget(target.id, mg.id, null, {
+          id: newMsgId('dlg-replay'),
+          kind: 'chat',
+          timestamp: new Date().toISOString(),
+          channelType: mg.channel_type,
+          platformId: mg.platform_id,
+          content: JSON.stringify({ text: replay }),
+        });
+        log.info('Delegation replay forwarded', { chatKey: key, target: target.folder });
+      } catch (err) {
+        log.error('Delegation replay failed', { chatKey: key, err });
+      }
+    }
+  },
+  unguarded(
+    'internal routing bookkeeping — binds an already-wired chat to a specialist agent group; no external side effect',
+  ),
+);
 
 // --- `end_delegation`: target releases the chat back to the Router. ---
-registerDeliveryAction('end_delegation', async (_content, session) => {
-  if (!session.messaging_group_id) return;
-  const mg = getMessagingGroup(session.messaging_group_id);
-  if (!mg) return;
-  const key = chatKeyForMg(mg);
-  const del = getDelegation(key);
-  deleteDelegation(key);
-  if (del) removeChannelDestination(del.targetAgentGroupId, mg);
-  log.info('Delegation ended', { chatKey: key, by: session.agent_group_id });
-});
+registerDeliveryAction(
+  'end_delegation',
+  async (_content, session) => {
+    if (!session.messaging_group_id) return;
+    const mg = getMessagingGroup(session.messaging_group_id);
+    if (!mg) return;
+    const key = chatKeyForMg(mg);
+    const del = getDelegation(key);
+    deleteDelegation(key);
+    if (del) removeChannelDestination(del.targetAgentGroupId, mg);
+    log.info('Delegation ended', { chatKey: key, by: session.agent_group_id });
+  },
+  unguarded('internal routing bookkeeping — releases a chat back to the Router; no external side effect'),
+);
 
 // --- Idle sweep: expire delegations idle beyond the timeout. ---
 setInterval(() => {

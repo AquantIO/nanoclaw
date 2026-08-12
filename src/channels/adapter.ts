@@ -160,6 +160,8 @@ export interface ChannelDefaults {
    * Creation surfaces must reject/warn on mention modes that can never fire.
    */
   mentions: 'platform' | 'dm-only' | 'never';
+}
+
 /** One earlier message recovered from a thread-history backfill. */
 export interface ThreadHistoryMessage {
   sender: string;
@@ -254,6 +256,8 @@ export interface ChannelAdapter {
    * shared-number mode), but is immutable for the process lifetime.
    */
   defaults?: ChannelDefaults;
+
+  /**
    * Fetch the messages that precede a given point in a thread. Called by
    * the router once per session, when a session is created by a
    * NON-top-level message, to give the agent the thread context that

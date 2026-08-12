@@ -536,20 +536,16 @@ export async function processQuery(
         const batchRouting = promptRoutings[0] ?? routing;
         if (event.text) {
           const { sent, hasUnwrapped, taskBlocks } = dispatchResultText(event.text, batchRouting);
-          const willRetryTaskBlocks = shouldNudgeTaskBlocks(
-            batchRouting.taskRun,
-            taskBlocks,
-            taskBlockNudged,
-          );
+          const willRetryTaskBlocks = shouldNudgeTaskBlocks(routing.taskRun, taskBlocks, taskBlockNudged);
           // One-door task delivery: the final text becomes the run log entry
           // while explicit append-log calls remain optional additive notes.
           // Errors included: a failed run's text belongs in its log, not chat.
           // A corrective retry handles delivery only; its result is not a
           // second run summary.
-          // Aquant: keyed off batchRouting, not routing — the log entry belongs
-          // to the batch this result actually answers, same as the reply.
-          if (batchRouting.taskRun && !taskBlockNudged) autoAppendTaskLog(event.text);
-          if (sent === 0 && event.isError === true && !batchRouting.taskRun) {
+          // taskRun is a property of the TURN, not of an individual prompt batch,
+          // so it stays on `routing` — only the reply ADDRESS follows batchRouting.
+          if (routing.taskRun && !taskBlockNudged) autoAppendTaskLog(event.text);
+          if (sent === 0 && event.isError === true && !routing.taskRun) {
             // Non-retryable error turn (e.g. a 403 billing_error) with no
             // <message> envelope: deliver the notice instead of dropping it as
             // scratchpad, and skip the re-wrap nudge — it would just re-hammer
