@@ -583,6 +583,22 @@ async function buildContainerArgs(
   // Default 900k (leaves headroom under 1M); override via host env.
   args.push('-e', `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '900000'}`);
 
+  // --- Aquant custom: switch off two CLI subsystems that cost us and buy nothing.
+  //
+  // DISABLE_AUTOUPDATER — our image tags are immutable and the global pnpm dir is
+  // not writable, so the updater can only ever fail. `claude doctor` reports it as
+  // a warning on every run; an agent that could update itself would also silently
+  // diverge from the tag its group is pinned to, which is the whole point of the
+  // pinning scheme.
+  //
+  // DISABLE_AUTO_MEMORY — measured 2026-08-12: not one group has ever produced a
+  // memory artifact. Our agents' durable knowledge is deliberately external and
+  // git-backed (the read-only wiki mount, incidents via POST /incidents), so the
+  // memory subsystem is pure baseline prompt cost on every round trip.
+  // Both are overridable from the host env if that ever changes.
+  args.push('-e', `DISABLE_AUTOUPDATER=${process.env.DISABLE_AUTOUPDATER || '1'}`);
+  args.push('-e', `DISABLE_AUTO_MEMORY=${process.env.DISABLE_AUTO_MEMORY || '1'}`);
+
   // --- Aquant custom (DEVOPS-759): route the agent CLI at Azure Foundry instead
   // of the direct vendor API. Gated on ANTHROPIC_FOUNDRY_RESOURCE in the host
   // .env, so deleting that one line and restarting is the entire rollback.
