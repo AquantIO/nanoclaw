@@ -580,6 +580,49 @@ async function buildContainerArgs(
   // Default 900k (leaves headroom under 1M); override via host env.
   args.push('-e', `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '900000'}`);
 
+  // --- Aquant custom (DEVOPS-759): route the agent CLI at Azure Foundry instead
+  // of the direct vendor API. Gated on ANTHROPIC_FOUNDRY_RESOURCE in the host
+  // .env, so deleting that one line and restarting is the entire rollback.
+  //
+  // The key is deliberately a PLACEHOLDER. The OneCLI gateway already proxies the
+  // container's egress and injects the real Foundry key on the wire for
+  // <resource>.services.ai.azure.com (a `generic` secret, headerName x-api-key),
+  // exactly as it does for the ANTHROPIC_API_KEY=placeholder it sets itself.
+  // Verified end-to-end 2026-08-12: a request carrying only the placeholder,
+  // sent through the proxy, returns 200. Agents never hold a real credential.
+  //
+  // The model ids must match DEPLOYMENT names on the account, not vendor model
+  // ids; ours are named after the models (claude-opus-5, claude-haiku-4-5) so
+  // they pass straight through. Haiku is deployed because the CLI uses a small
+  // model for background work, which would 404 with no deployment behind it.
+  const foundry = readEnvFile([
+    'ANTHROPIC_FOUNDRY_RESOURCE',
+    'ANTHROPIC_FOUNDRY_GROUPS',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  ]);
+  // ANTHROPIC_FOUNDRY_GROUPS is an optional comma-separated allowlist of agent
+  // group folders, so the cutover can be rolled one group at a time. Unset or
+  // empty = every group (the end state).
+  const foundryGroups = (foundry.ANTHROPIC_FOUNDRY_GROUPS || '')
+    .split(',')
+    .map((g) => g.trim())
+    .filter(Boolean);
+  const foundryEnabled =
+    !!foundry.ANTHROPIC_FOUNDRY_RESOURCE &&
+    (foundryGroups.length === 0 || foundryGroups.includes(agentGroup.folder));
+  if (foundryEnabled) {
+    args.push('-e', 'CLAUDE_CODE_USE_FOUNDRY=1');
+    args.push('-e', `ANTHROPIC_FOUNDRY_RESOURCE=${foundry.ANTHROPIC_FOUNDRY_RESOURCE}`);
+    args.push('-e', 'ANTHROPIC_FOUNDRY_API_KEY=placeholder');
+    for (const key of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL'] as const) {
+      if (foundry[key]) args.push('-e', `${key}=${foundry[key]}`);
+    }
+    log.info('Foundry routing enabled for agent container', {
+      containerName,
+      resource: foundry.ANTHROPIC_FOUNDRY_RESOURCE,
+    });
+  }
   // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
   args.push('--entrypoint', 'bash');
 
