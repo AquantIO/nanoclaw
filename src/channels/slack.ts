@@ -30,7 +30,7 @@ import type { ThreadHistoryMessage } from './adapter.js';
 
 /** Flatten a raw Slack message (text + attachments pretext/title/text/fields/fallback)
  *  into one text block. Mirrors the thread-root enrichment in
- *  patches/@chat-adapter__slack@4.27.0.patch so AlertManager payloads survive. */
+ *  patches/@chat-adapter__slack@4.29.0.patch so AlertManager payloads survive. */
 export function flattenSlackMessageText(m: Record<string, unknown>): string {
   const atts = Array.isArray(m.attachments) ? (m.attachments as Array<Record<string, unknown>>) : [];
   const attText = atts
@@ -229,16 +229,24 @@ registerChannelAdapter('slack', {
       return out;
     };
 
-    // Cast: @chat-adapter/slack@4.27.0 bundles chat@4.27.0 while core resolves
-    // chat@4.26.0 — a transitive minor skew the sanctioned add-slack skill pins
-    // away per-release. The adapter surface the bridge uses is unchanged.
     const bridge = createChatSdkBridge({
-      adapter: slackAdapter as unknown as Parameters<typeof createChatSdkBridge>[0]['adapter'],
+      adapter: slackAdapter,
       concurrency: 'concurrent',
       supportsThreads: true,
       botToken: defaultToken ?? Object.values(byTeam)[0],
       fetchThreadHistory,
     });
+    // Names a messaging group the first time an unknown channel registers
+    // (channel-approval reads it). Best-effort: in multi-workspace mode the
+    // lookup runs outside any request context and may have no token to use.
+    bridge.resolveChannelName = async (platformId: string) => {
+      try {
+        const info = await slackAdapter.fetchThread(platformId);
+        return (info as { channelName?: string }).channelName ?? null;
+      } catch {
+        return null;
+      }
+    };
     return bridge;
   },
 });

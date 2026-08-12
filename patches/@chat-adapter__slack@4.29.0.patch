@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index e1d9675..0e199e3 100644
+index dd24754..3f6435b 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -865,8 +865,34 @@ var SlackAdapter = class _SlackAdapter {
+@@ -863,8 +863,34 @@ var SlackAdapter = class _SlackAdapter {
     * Workaround for Slack WebClient types not including `token` in per-method args.
     */
    async withToken(options) {
@@ -24,7 +24,7 @@ index e1d9675..0e199e3 100644
 +        try {
 +          const c = await this.resolveTokenForTeam(t);
 +          if (!c) continue;
-+          const r = await this.client.conversations.info({ channel: channelId, token: c.token });
++          const r = await this._client.conversations.info({ channel: channelId, token: c.token });
 +          if (r && r.ok) { team = t; break; }
 +        } catch { /* try next */ }
 +      }
@@ -37,7 +37,7 @@ index e1d9675..0e199e3 100644
    async initialize(chat) {
      this.chat = chat;
      if (this.defaultBotTokenProvider && !this._botUserId) {
-@@ -1692,7 +1718,17 @@ var SlackAdapter = class _SlackAdapter {
+@@ -1755,7 +1781,17 @@ var SlackAdapter = class _SlackAdapter {
            event_time: body.event_time
          };
          try {
@@ -56,7 +56,7 @@ index e1d9675..0e199e3 100644
          } catch (error) {
            this.logger.error("Error processing socket mode events_api", {
              error
-@@ -1959,11 +1995,39 @@ var SlackAdapter = class _SlackAdapter {
+@@ -2022,11 +2058,39 @@ var SlackAdapter = class _SlackAdapter {
      });
      const isMention = event.type === "app_mention";
      const factory = async () => {
@@ -73,7 +73,7 @@ index e1d9675..0e199e3 100644
 +            try {
 +              const __c = await this.resolveTokenForTeam(__t);
 +              if (!__c) continue;
-+              const __r = await this.client.conversations.info({ channel: event.channel, token: __c.token });
++              const __r = await this._client.conversations.info({ channel: event.channel, token: __c.token });
 +              if (__r && __r.ok) { __teamId = __t; this.__aqChanTeam.set(event.channel, __t); break; }
 +            } catch { /* try next */ }
 +          }
@@ -100,7 +100,7 @@ index e1d9675..0e199e3 100644
      };
      this.chat.processMessage(this, threadId, factory, options);
    }
-@@ -2307,14 +2371,22 @@ var SlackAdapter = class _SlackAdapter {
+@@ -2370,14 +2434,22 @@ var SlackAdapter = class _SlackAdapter {
      const [userLookups, channelLookups] = await Promise.all([
        Promise.all(
          [...userIds].map(async (uid) => {
@@ -127,7 +127,7 @@ index e1d9675..0e199e3 100644
          })
        )
      ]);
-@@ -2438,7 +2510,29 @@ var SlackAdapter = class _SlackAdapter {
+@@ -2501,7 +2573,29 @@ var SlackAdapter = class _SlackAdapter {
    async parseSlackMessage(event, threadId, options) {
      const isMe = this.isMessageFromSelf(event);
      const skipSelfMention = options?.skipSelfMention ?? true;
@@ -135,7 +135,7 @@ index e1d9675..0e199e3 100644
 +    let rawText = event.text || "";
 +    try {
 +      if (event.channel && event.thread_ts && event.thread_ts !== event.ts && !options?.skipThreadRoot) {
-+        const __rootRes = await this.client.conversations.history(
++        const __rootRes = await this._client.conversations.history(
 +          await this.withToken({ channel: event.channel, latest: event.thread_ts, oldest: event.thread_ts, inclusive: true, limit: 1 }),
 +        );
 +        const __root = __rootRes && __rootRes.messages && __rootRes.messages[0];
@@ -158,7 +158,7 @@ index e1d9675..0e199e3 100644
      let userName = event.username || "unknown";
      let fullName = event.username || "unknown";
      if (event.user && !event.username) {
-@@ -3435,6 +3529,61 @@ var SlackAdapter = class _SlackAdapter {
+@@ -3395,6 +3489,61 @@ var SlackAdapter = class _SlackAdapter {
        this.handleSlackError(error);
      }
    }
@@ -166,14 +166,14 @@ index e1d9675..0e199e3 100644
 +    const { channel } = this.decodeThreadId(threadId);
 +    if (unpinPrevious) {
 +      try {
-+        const list = await this.client.pins.list(await this.withToken({ channel }));
++        const list = await this._client.pins.list(await this.withToken({ channel }));
 +        const own = await this.__aqOwnUserId(channel);
 +        for (const item of (list && list.items) || []) {
 +          const ts = item.message && item.message.ts;
 +          if (!ts || ts === messageId) continue;
 +          if (!own || item.created_by !== own) continue;
 +          try {
-+            await this.client.pins.remove(await this.withToken({ channel, timestamp: ts }));
++            await this._client.pins.remove(await this.withToken({ channel, timestamp: ts }));
 +            this.logger.debug("Slack API: pins.remove (rolling)", { channel, ts });
 +          } catch (e) {
 +            this.logger.warn("Slack API: pins.remove failed", { channel, ts });
@@ -185,7 +185,7 @@ index e1d9675..0e199e3 100644
 +    }
 +    try {
 +      this.logger.debug("Slack API: pins.add", { channel, messageId });
-+      await this.client.pins.add(await this.withToken({ channel, timestamp: messageId }));
++      await this._client.pins.add(await this.withToken({ channel, timestamp: messageId }));
 +    } catch (error) {
 +      const code = error && error.data && error.data.error;
 +      if (code === "already_pinned") return;
@@ -196,7 +196,7 @@ index e1d9675..0e199e3 100644
 +    const { channel } = this.decodeThreadId(threadId);
 +    try {
 +      this.logger.debug("Slack API: pins.remove", { channel, messageId });
-+      await this.client.pins.remove(await this.withToken({ channel, timestamp: messageId }));
++      await this._client.pins.remove(await this.withToken({ channel, timestamp: messageId }));
 +    } catch (error) {
 +      const code = error && error.data && error.data.error;
 +      if (code === "no_pin" || code === "not_pinned") return;
@@ -209,7 +209,7 @@ index e1d9675..0e199e3 100644
 +      const opts = await this.withToken({ channel });
 +      const tok = opts.token;
 +      if (this.__aqOwnIds.has(tok)) return this.__aqOwnIds.get(tok);
-+      const r = await this.client.auth.test({ token: tok });
++      const r = await this._client.auth.test({ token: tok });
 +      const id = r && r.ok ? r.user_id : null;
 +      this.__aqOwnIds.set(tok, id);
 +      return id;
