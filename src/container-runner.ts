@@ -592,13 +592,17 @@ async function buildContainerArgs(
   // sent through the proxy, returns 200. Agents never hold a real credential.
   //
   // The model ids must match DEPLOYMENT names on the account, not vendor model
-  // ids; ours are named after the models (claude-opus-5, claude-haiku-4-5) so
-  // they pass straight through. Haiku is deployed because the CLI uses a small
-  // model for background work, which would 404 with no deployment behind it.
+  // ids; ours are named after the models so they pass straight through. All
+  // three tiers are pinned because only error-triage-agent sets an explicit model
+  // in container_configs — the other six inherit the CLI's default tier, which
+  // would otherwise resolve to whatever vendor id the CLI ships with and 404
+  // against an account that has no deployment by that name. Haiku is deployed for
+  // the same reason: the CLI reaches for a small model for background work.
   const foundry = readEnvFile([
     'ANTHROPIC_FOUNDRY_RESOURCE',
     'ANTHROPIC_FOUNDRY_GROUPS',
     'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
     'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   ]);
   // ANTHROPIC_FOUNDRY_GROUPS is an optional comma-separated allowlist of agent
@@ -615,7 +619,11 @@ async function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_USE_FOUNDRY=1');
     args.push('-e', `ANTHROPIC_FOUNDRY_RESOURCE=${foundry.ANTHROPIC_FOUNDRY_RESOURCE}`);
     args.push('-e', 'ANTHROPIC_FOUNDRY_API_KEY=placeholder');
-    for (const key of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL'] as const) {
+    for (const key of [
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    ] as const) {
       if (foundry[key]) args.push('-e', `${key}=${foundry[key]}`);
     }
     log.info('Foundry routing enabled for agent container', {
